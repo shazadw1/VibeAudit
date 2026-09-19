@@ -6,18 +6,34 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
 cd "$SCRIPT_DIR/../.."
-mkdir -p .factory
+
+stamp_file=.factory/last-verify.json
+stamp_tmp=.factory/last-verify.json.tmp
+
+# red <message>: the one exit path for every RED outcome. Prints the
+# message, then removes the stamp (and any .tmp) before exiting 1, so a
+# run that fails before it ever gets to write a fresh stamp -- broken
+# .factory/, a failing selftest, a bad HEAD, a failed write/mv, or a
+# stamp that doesn't validate right after being written -- can never
+# leave a previous GREEN stamp in place for the commit gate to trust.
+red() {
+  printf '%s\n' "$1"
+  rm -f -- "$stamp_file" "$stamp_tmp"
+  exit 1
+}
+
+if ! err=$(ensure_factory_dir 2>&1); then
+  red "VERIFY RED (${err:-.factory/ not usable})"
+fi
 
 echo "== selftest"
 if ! scripts/factory/selftest.sh; then
-  echo "VERIFY RED (selftest failed)"
-  exit 1
+  red "VERIFY RED (selftest failed)"
 fi
 
 head=$(g rev-parse HEAD)
-if [ -z "$head" ]; then
-  echo "VERIFY RED (git rev-parse HEAD failed)"
-  exit 1
+if ! printf '%s' "$head" | grep -Eq '^[0-9a-f]{40}$'; then
+  red "VERIFY RED (git rev-parse HEAD did not return a 40-char hex hash)"
 fi
 
 rc=0
@@ -32,6 +48,20 @@ if [ -z "$fingerprint" ]; then
 fi
 at=$(date -u +%FT%TZ)
 status=green; [ $rc -eq 0 ] || status=red
-printf '{"status":"%s","head":"%s","fingerprint":"%s","at":"%s"}\n' "$status" "$head" "$fingerprint" "$at" > .factory/last-verify.json
+
+# Clear any leftover .tmp (e.g. from a prior interrupted run, or the
+# other OS user) before writing, so a stale .tmp can never shadow or
+# block this run's write.
+rm -f -- "$stamp_tmp"
+if ! printf '{"status":"%s","head":"%s","fingerprint":"%s","at":"%s"}\n' "$status" "$head" "$fingerprint" "$at" > "$stamp_tmp"; then
+  red "VERIFY RED (could not write $stamp_tmp)"
+fi
+if ! mv -- "$stamp_tmp" "$stamp_file"; then
+  red "VERIFY RED (could not move stamp into place)"
+fi
+if ! validate_stamp "$stamp_file"; then
+  red "VERIFY RED (stamp invalid after write)"
+fi
+
 [ $rc -eq 0 ] && echo "VERIFY GREEN" || echo "VERIFY RED"
 exit $rc

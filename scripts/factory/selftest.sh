@@ -49,6 +49,155 @@ else
 fi
 rm -f "$preflight_log"
 
+# -- (T5a) worktree_fingerprint under broken git, tested directly (not just
+# indirectly through the gate): must return non-zero AND print nothing on
+# stdout. Run in a subshell so GIT_DIR only affects this one call.
+fp_broken_out=$(GIT_DIR=/nonexistent bash -c '. "$1/lib.sh" && worktree_fingerprint' _ "$SCRIPT_DIR" 2>/dev/null)
+fp_broken_rc=$?
+if [ "$fp_broken_rc" -ne 0 ] && [ -z "$fp_broken_out" ]; then
+  ok "worktree_fingerprint returns non-zero and prints nothing under broken git"
+else
+  bad "worktree_fingerprint rc=$fp_broken_rc out='$fp_broken_out' under broken git (want rc!=0, empty output)"
+fi
+
+# -- (T5b) validate_stamp: accepts a well-formed stamp, rejects each of
+# missing file, empty file, 39-char head, 63-char fingerprint, status
+# "yellow", an extra key, and truncated JSON. Isolated in a scratch dir so
+# it never touches the real .factory/last-verify.json.
+stamp_scratch=$(mktemp -d)
+good_head=$(printf '%040x' 1)
+good_fp=$(printf '%064x' 1)
+
+good_stamp="$stamp_scratch/good.json"
+printf '{"status":"green","head":"%s","fingerprint":"%s","at":"2026-09-19T00:00:00Z"}' "$good_head" "$good_fp" > "$good_stamp"
+if validate_stamp "$good_stamp"; then ok "validate_stamp accepts a well-formed stamp"; else bad "validate_stamp rejected a well-formed stamp"; fi
+
+missing_stamp="$stamp_scratch/missing.json"
+if validate_stamp "$missing_stamp"; then bad "validate_stamp accepted a missing file"; else ok "validate_stamp rejects a missing file"; fi
+
+empty_stamp="$stamp_scratch/empty.json"
+: > "$empty_stamp"
+if validate_stamp "$empty_stamp"; then bad "validate_stamp accepted an empty file"; else ok "validate_stamp rejects an empty file"; fi
+
+short_head_stamp="$stamp_scratch/short_head.json"
+printf '{"status":"green","head":"%s","fingerprint":"%s","at":"2026-09-19T00:00:00Z"}' "${good_head%?}" "$good_fp" > "$short_head_stamp"
+if validate_stamp "$short_head_stamp"; then bad "validate_stamp accepted a 39-char head"; else ok "validate_stamp rejects a 39-char head"; fi
+
+short_fp_stamp="$stamp_scratch/short_fp.json"
+printf '{"status":"green","head":"%s","fingerprint":"%s","at":"2026-09-19T00:00:00Z"}' "$good_head" "${good_fp%?}" > "$short_fp_stamp"
+if validate_stamp "$short_fp_stamp"; then bad "validate_stamp accepted a 63-char fingerprint"; else ok "validate_stamp rejects a 63-char fingerprint"; fi
+
+yellow_stamp="$stamp_scratch/yellow.json"
+printf '{"status":"yellow","head":"%s","fingerprint":"%s","at":"2026-09-19T00:00:00Z"}' "$good_head" "$good_fp" > "$yellow_stamp"
+if validate_stamp "$yellow_stamp"; then bad "validate_stamp accepted status \"yellow\""; else ok "validate_stamp rejects status \"yellow\""; fi
+
+extra_key_stamp="$stamp_scratch/extra.json"
+printf '{"status":"green","head":"%s","fingerprint":"%s","at":"2026-09-19T00:00:00Z","extra":"x"}' "$good_head" "$good_fp" > "$extra_key_stamp"
+if validate_stamp "$extra_key_stamp"; then bad "validate_stamp accepted an extra key"; else ok "validate_stamp rejects an extra key"; fi
+
+truncated_stamp="$stamp_scratch/truncated.json"
+printf '{"status":"green","head":"%s","fingerprint":"%s"' "$good_head" "$good_fp" > "$truncated_stamp"
+if validate_stamp "$truncated_stamp"; then bad "validate_stamp accepted truncated JSON"; else ok "validate_stamp rejects truncated JSON"; fi
+
+rm -rf "$stamp_scratch"
+
+# -- (T5e) validate_stamp must reject a directory sitting where the stamp
+# file should be -- the state a broken `mv` into place would leave behind
+# (verify.sh's atomic write-then-mv). Isolated scratch dir.
+mv_scratch=$(mktemp -d)
+mkdir -p "$mv_scratch/.factory/last-verify.json"
+if validate_stamp "$mv_scratch/.factory/last-verify.json"; then
+  bad "validate_stamp accepted a directory in place of the stamp file"
+else
+  ok "validate_stamp rejects a directory in place of the stamp file"
+fi
+rm -rf "$mv_scratch"
+
+# -- (T5c) ensure_factory_dir: a read-only scratch .factory/ must fail with
+# a non-empty message. Never chmod the real .factory/ -- only this scratch
+# copy under mktemp -d is touched, and its permissions are restored before
+# it is removed.
+perm_scratch=$(mktemp -d)
+scratch_factory="$perm_scratch/.factory"
+mkdir -p "$scratch_factory"
+chmod 500 "$scratch_factory"
+perm_err=$(ensure_factory_dir "$scratch_factory" 2>&1)
+perm_rc=$?
+chmod 700 "$scratch_factory"
+if [ "$perm_rc" -ne 0 ] && [ -n "$perm_err" ]; then
+  ok "ensure_factory_dir fails with a message on a read-only directory"
+else
+  bad "ensure_factory_dir rc=$perm_rc msg='$perm_err' on a read-only scratch directory (want rc!=0, non-empty message)"
+fi
+rm -rf "$perm_scratch"
+
+# -- (F3 fix round 1, finding 2) ensure_factory_dir must also reject an
+# unwritable leftover last-verify.json.tmp, with the same owner/mode
+# message shape as the other permission checks -- this is the exact
+# two-user leftover case ensure_factory_dir exists for, just for the .tmp
+# instead of the stamp itself. Never touches the real .factory/.
+tmp_perm_scratch=$(mktemp -d)
+tmp_perm_factory="$tmp_perm_scratch/.factory"
+mkdir -p "$tmp_perm_factory"
+: > "$tmp_perm_factory/last-verify.json.tmp"
+chmod 400 "$tmp_perm_factory/last-verify.json.tmp"
+tmp_owner=$(stat -c %U -- "$tmp_perm_factory/last-verify.json.tmp")
+tmp_perm_err=$(ensure_factory_dir "$tmp_perm_factory" 2>&1)
+tmp_perm_rc=$?
+chmod 600 "$tmp_perm_factory/last-verify.json.tmp"
+expected_tmp_perm_err="factory: $tmp_perm_factory/last-verify.json.tmp is not writable by this user (owner: $tmp_owner, mode: 400)"
+if [ "$tmp_perm_rc" -ne 0 ] && [ "$tmp_perm_err" = "$expected_tmp_perm_err" ]; then
+  ok "ensure_factory_dir fails with the owner/mode message on an unwritable leftover .tmp"
+else
+  bad "ensure_factory_dir rc=$tmp_perm_rc msg='$tmp_perm_err' on an unwritable .tmp (want rc!=0, msg='$expected_tmp_perm_err')"
+fi
+rm -rf "$tmp_perm_scratch"
+
+# -- (F3 fix round 1, finding 1) a RED verify must leave no stamp file
+# behind at all -- not even a previous run's trusted GREEN one. Runs the
+# real verify.sh (and the real, fixed lib.sh) in an isolated scratch repo:
+# selftest.sh is stubbed to an instant `exit 0` and `npx` is stubbed to an
+# instant `exit 1` so this never runs tsc/lint/vitest or this repo's own
+# selftest, only verify.sh's own ensure_factory_dir -> selftest -> HEAD ->
+# checks -> stamp-write sequence. The scratch .factory/ starts with a
+# green stamp and an already-a-directory last-verify.json.tmp, reproducing
+# the reviewer's "mkdir .factory/last-verify.json.tmp" repro so the write
+# step itself fails and forces the red() cleanup path.
+redscratch=$(mktemp -d)
+mkdir -p "$redscratch/scripts/factory" "$redscratch/.factory" "$redscratch/fakebin"
+cp "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/verify.sh" "$redscratch/scripts/factory/"
+chmod +x "$redscratch/scripts/factory/verify.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$redscratch/scripts/factory/selftest.sh"
+chmod +x "$redscratch/scripts/factory/selftest.sh"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$redscratch/fakebin/npx"
+chmod +x "$redscratch/fakebin/npx"
+prior_head=$(printf '%040x' 2)
+prior_fp=$(printf '%064x' 2)
+printf '{"status":"green","head":"%s","fingerprint":"%s","at":"1970-01-01T00:00:00Z"}' "$prior_head" "$prior_fp" > "$redscratch/.factory/last-verify.json"
+mkdir -p "$redscratch/.factory/last-verify.json.tmp"
+if [ -n "$redscratch" ] && (
+    cd "$redscratch" &&
+    git init -q &&
+    git config user.email selftest@example.invalid &&
+    git config user.name selftest &&
+    echo base > base.md &&
+    git add base.md &&
+    git commit -q -m init
+  ) >/dev/null 2>&1
+then
+  ( cd "$redscratch" && PATH="$redscratch/fakebin:$PATH" scripts/factory/verify.sh ) >/dev/null 2>&1
+  redscratch_rc=$?
+  if [ "$redscratch_rc" -ne 0 ] && [ ! -e "$redscratch/.factory/last-verify.json" ]; then
+    ok "a RED verify (stamp write blocked) removes a previously-trusted GREEN stamp"
+  else
+    stamp_state=missing; [ -e "$redscratch/.factory/last-verify.json" ] && stamp_state=present
+    bad "verify.sh rc=$redscratch_rc, stamp $stamp_state after a blocked write (want rc!=0, stamp missing)"
+  fi
+else
+  bad "selftest setup: could not build the scratch repo for the RED-stamp-removal case"
+fi
+rm -rf "$redscratch"
+
 # -- (b) a non-commit command must be a no-op: exit 0, no output --
 out=$(commit_payload "ls" | scripts/factory/commit-gate.sh)
 rc=$?
@@ -61,18 +210,29 @@ if [ $rc -eq 0 ] && [ -z "$out" ]; then ok "gate allows a non-commit command wit
 # finding 2).
 tmp_file="lib/__selftest_tmp.ts"
 stamp_backup=""
+stamp_backup_check=""
+# Fallback safety net only: the normal path restores and verifies the stamp
+# explicitly near the end of this script (T5d), then clears stamp_backup,
+# so this trap has nothing left to do on a clean exit. It only fires for
+# real on an unexpected early exit.
 cleanup() {
   git rm --cached -q "$tmp_file" >/dev/null 2>&1
   rm -f "$tmp_file"
-  if [ -n "$stamp_backup" ]; then mv "$stamp_backup" .factory/last-verify.json; fi
+  if [ -n "$stamp_backup" ] && [ -e "$stamp_backup" ]; then
+    cp "$stamp_backup" .factory/last-verify.json 2>/dev/null
+    rm -f "$stamp_backup" "$stamp_backup_check"
+  fi
 }
 
 if [ -f .factory/last-verify.json ]; then
   candidate=$(mktemp) || { bad "selftest setup: mktemp failed for stamp backup"; exit 1; }
-  if cp .factory/last-verify.json "$candidate" && [ -s "$candidate" ]; then
+  check_candidate=$(mktemp) || { rm -f "$candidate"; bad "selftest setup: mktemp failed for stamp backup check copy"; exit 1; }
+  if cp .factory/last-verify.json "$candidate" && [ -s "$candidate" ] \
+     && cp .factory/last-verify.json "$check_candidate" && [ -s "$check_candidate" ]; then
     stamp_backup="$candidate"
+    stamp_backup_check="$check_candidate"
   else
-    rm -f "$candidate"
+    rm -f "$candidate" "$check_candidate"
     bad "selftest setup: could not back up .factory/last-verify.json -- aborting before touching it"
     echo; echo "selftest: $pass passed, $fail failed"
     exit 1
@@ -80,9 +240,18 @@ if [ -f .factory/last-verify.json ]; then
 fi
 trap cleanup EXIT
 
+# write_stamp <json>: fails the case (not just returns) on either a
+# non-zero write or an empty result -- a permission error on the write
+# must be its own failure, not indistinguishable from "wrote an empty file".
 write_stamp() {
-  printf '%s\n' "$1" > .factory/last-verify.json
-  [ -s .factory/last-verify.json ] || { bad "selftest: failed to write crafted stamp"; return 1; }
+  if ! printf '%s\n' "$1" > .factory/last-verify.json; then
+    bad "selftest: failed to write crafted stamp (write returned non-zero)"
+    return 1
+  fi
+  if [ ! -s .factory/last-verify.json ]; then
+    bad "selftest: failed to write crafted stamp (file empty after write)"
+    return 1
+  fi
   return 0
 }
 
@@ -181,12 +350,30 @@ then
 
   out=$(commit_payload "git commit -a -m x" | "$gate")
   assert_deny_reason "$out" \
-    "commit gate: run scripts/factory/verify.sh and get it green first" \
+    "commit gate: verify stamp missing or malformed, re-run verify.sh" \
     "gate denies -a via the broad-commit path with an all-.md, otherwise-clean stage"
 else
   bad "selftest setup: could not build the scratch repo for the isolated -a case"
 fi
 rm -rf "$broad_scratch"
+
+# -- (T5d) restore the real stamp explicitly (not only via the EXIT trap)
+# and assert byte-identical restoration with cmp; a failed write or
+# restore is itself a failing case, not something [ -s ] can paper over.
+if [ -n "$stamp_backup" ]; then
+  if cp "$stamp_backup" .factory/last-verify.json; then
+    if cmp -s .factory/last-verify.json "$stamp_backup_check"; then
+      ok "restored stamp is byte-identical to the backup"
+    else
+      bad "restored stamp differs from the backup (cmp mismatch)"
+    fi
+  else
+    bad "failed to restore .factory/last-verify.json from backup (cp returned non-zero)"
+  fi
+  rm -f "$stamp_backup" "$stamp_backup_check"
+  stamp_backup=""
+  stamp_backup_check=""
+fi
 
 echo
 echo "selftest: $pass passed, $fail failed"

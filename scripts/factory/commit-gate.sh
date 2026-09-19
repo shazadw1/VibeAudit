@@ -71,23 +71,25 @@ printf '%s\n' "$staged" | grep -Evq '\.md$' && doc_only_safe=0
 # 3. non-doc (or unsafe-to-exempt) commits: the tree must be exactly what
 # verify.sh checked.
 if [ "$doc_only_safe" -eq 0 ]; then
-  [ -f .factory/last-verify.json ] || deny "commit gate: run scripts/factory/verify.sh and get it green first"
+  # validate_stamp before reading any field: a missing or malformed stamp
+  # (truncated, hand-edited, wrong-length hash, extra key) is denied here,
+  # never partially parsed.
+  validate_stamp .factory/last-verify.json || deny "commit gate: verify stamp missing or malformed, re-run verify.sh"
   stamp=$(cat .factory/last-verify.json)
+  # Exact-key extraction, not substring grep: validate_stamp already
+  # guaranteed this is exactly {"status":..,"head":..,"fingerprint":..,"at":..}
+  # in that order, so anchored sed captures are unambiguous.
+  stamp_status=$(printf '%s' "$stamp" | sed -E 's/^\{"status":"([^"]*)".*$/\1/')
+  stamp_head=$(printf '%s' "$stamp" | sed -E 's/^\{"status":"[^"]*","head":"([^"]*)".*$/\1/')
+  stamp_fingerprint=$(printf '%s' "$stamp" | sed -E 's/^\{"status":"[^"]*","head":"[^"]*","fingerprint":"([^"]*)".*$/\1/')
+
   head=$(g rev-parse HEAD); deny_if_failed $? "git rev-parse HEAD"
   fp=$(worktree_fingerprint)
   [ $? -eq 0 ] && [ -n "$fp" ] || deny "commit gate: could not compute worktree fingerprint; add safe.directory?"
-  case "$stamp" in
-    *'"status":"green"'*) ;;
-    *) deny "commit gate: last verify was not green" ;;
-  esac
-  case "$stamp" in
-    *"\"head\":\"$head\""*) ;;
-    *) deny "commit gate: verify stamp head does not match current HEAD, re-run verify.sh" ;;
-  esac
-  case "$stamp" in
-    *"\"fingerprint\":\"$fp\""*) ;;
-    *) deny "commit gate: verify stamp fingerprint does not match worktree, re-run verify.sh" ;;
-  esac
+
+  [ "$stamp_status" = "green" ] || deny "commit gate: last verify was not green"
+  [ "$stamp_head" = "$head" ] || deny "commit gate: verify stamp head does not match current HEAD, re-run verify.sh"
+  [ "$stamp_fingerprint" = "$fp" ] || deny "commit gate: verify stamp fingerprint does not match worktree, re-run verify.sh"
   [ "$dq" -eq 0 ] || deny "commit gate: unstaged non-doc changes present, stage or stash them before committing"
 fi
 exit 0

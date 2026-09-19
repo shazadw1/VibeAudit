@@ -66,9 +66,43 @@ else
 fi
 [ -f .env.local ] && warnf ".env.local present: never read or print it" || ok "no .env.local"
 
+echo "-- runtime artifacts"
+if artifact_err=$(ensure_factory_dir 2>&1); then
+  ok ".factory/ exists, is a directory, and is writable"
+else
+  bad "${artifact_err:-.factory/ not usable} -> chmod u+rwx .factory/ (or chown it to this user)"
+fi
+if [ -d .factory ] && [ -w .factory ]; then
+  rt_file=".factory/.preflight_rt_$$"
+  rt_val="preflight roundtrip $$"
+  if printf '%s\n' "$rt_val" > "$rt_file" 2>/dev/null \
+     && [ "$(cat "$rt_file" 2>/dev/null)" = "$rt_val" ] \
+     && rm -f "$rt_file"; then
+    ok ".factory/ write-read-delete round trip"
+  else
+    bad ".factory/ write-read-delete round trip failed"
+    rm -f "$rt_file" 2>/dev/null
+  fi
+else
+  bad ".factory/ write-read-delete round trip skipped: directory not usable"
+fi
+if [ -e .factory/last-verify.json ]; then
+  validate_stamp .factory/last-verify.json && ok ".factory/last-verify.json passes validate_stamp" \
+    || bad ".factory/last-verify.json exists but is malformed -> re-run scripts/factory/verify.sh"
+else
+  warnf ".factory/last-verify.json absent -> run scripts/factory/verify.sh"
+fi
+
 if [ $QUICK -eq 0 ]; then
   echo "-- verification baseline"
-  if scripts/factory/verify.sh >/tmp/factory-verify.log 2>&1; then ok "verify.sh green (tsc, lint, tests)"; else bad "verify.sh failed -> see /tmp/factory-verify.log"; fi
+  verify_log=.factory/verify.log
+  if scripts/factory/verify.sh >"$verify_log" 2>&1; then
+    ok "verify.sh green (tsc, lint, tests)"
+  elif [ -s "$verify_log" ]; then
+    bad "verify.sh failed -> see $verify_log"
+  else
+    bad "verify.sh failed and $verify_log is missing or empty (redirect itself may have failed) -> check .factory/ permissions"
+  fi
 fi
 
 echo
