@@ -4,7 +4,10 @@
 # Exit 0 = all required checks pass. Exit 1 = at least one required check failed.
 # Usage: scripts/factory/preflight.sh [--quick]   (--quick skips tsc/lint/tests)
 set -u
-cd "$(dirname "$0")/../.."
+set -o pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/lib.sh"
+cd "$SCRIPT_DIR/../.."
 QUICK=0; [ "${1:-}" = "--quick" ] && QUICK=1
 fail=0; warn=0
 ok()   { printf '  [ok]   %s\n' "$1"; }
@@ -35,11 +38,32 @@ for s in scripts/factory/verify.sh scripts/factory/commit-gate.sh; do [ -x "$s" 
 for sk in brainstorming writing-plans subagent-driven-development requesting-code-review verification-before-completion; do
   [ -d "$HOME/.claude/skills/$sk" ] && ok "skill $sk" || warnf "skill $sk not installed globally (superpowers)"
 done
-git check-ignore -q .claude/settings.json && bad ".claude/settings.json is gitignored (fix .gitignore)" || ok ".claude tracked"
 
 echo "-- git"
-branch=$(git rev-parse --abbrev-ref HEAD); [ "$branch" = "main" ] && warnf "on main; factory work belongs on dev or a feature branch" || ok "branch $branch"
-[ -n "$(git status --porcelain)" ] && warnf "working tree has uncommitted changes" || ok "working tree clean"
+if toplevel=$(g rev-parse --show-toplevel); then
+  g check-ignore -q .claude/settings.json
+  ignored_rc=$?
+  if [ "$ignored_rc" -eq 0 ]; then
+    bad ".claude/settings.json is gitignored (fix .gitignore)"
+  elif [ "$ignored_rc" -eq 1 ]; then
+    ok ".claude tracked"
+  else
+    bad "git check-ignore failed -> git config --global --add safe.directory $toplevel"
+  fi
+
+  branch=$(g rev-parse --abbrev-ref HEAD)
+  if [ -z "$branch" ]; then
+    bad "git branch is blank -> git config --global --add safe.directory $toplevel"
+  elif [ "$branch" = "main" ]; then
+    warnf "on main; factory work belongs on dev or a feature branch"
+  else
+    ok "branch $branch"
+  fi
+  if [ -n "$(g status --porcelain)" ]; then warnf "working tree has uncommitted changes"; else ok "working tree clean"; fi
+else
+  bad "git rev-parse --show-toplevel failed -> git config --global --add safe.directory $PWD"
+  bad ".claude/settings.json gitignore check skipped -> git config --global --add safe.directory $PWD"
+fi
 [ -f .env.local ] && warnf ".env.local present: never read or print it" || ok "no .env.local"
 
 if [ $QUICK -eq 0 ]; then

@@ -15,7 +15,7 @@ Run `scripts/factory/preflight.sh` at the start of every session and before pick
 2. `/brainstorming` → produce a short spec. Stop and get user approval for anything that touches billing, auth, tenant isolation, or marketing claims.
 3. `/writing-plans` → task list with checkboxes. Save under `docs/tasks/<item-number>-<slug>.md`.
 4. `/subagent-driven-development` → dispatch the `implementer` subagent per task, then the `reviewer` subagent. Max 3 fix rounds, then ask the user.
-5. `scripts/factory/verify.sh` must be green before any non-doc commit. The PreToolUse hook enforces this.
+5. Stage first, then run `scripts/factory/verify.sh`, then commit in its own command. The stamp fingerprints the staged tree, and the hook evaluates the whole shell command before it runs, so a stage+verify+commit one-liner is gated on the stale state. The hook enforces green + matching HEAD and fingerprint.
 6. On acceptance: set the item `Done` (or `Needs Verification` if it needs a live environment), tick the matching checklist.md line, commit.
 
 ## 3. Hard rules

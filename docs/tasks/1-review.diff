@@ -1,0 +1,45 @@
+# Review package: item 1
+ components/marketing/landing-client.tsx | 8 +-------
+ docs/plan.md                            | 2 +-
+ 2 files changed, 2 insertions(+), 8 deletions(-)
+
+diff --git a/components/marketing/landing-client.tsx b/components/marketing/landing-client.tsx
+index 3854ddd..4672251 100644
+--- a/components/marketing/landing-client.tsx
++++ b/components/marketing/landing-client.tsx
+@@ -1274,34 +1274,28 @@ export function LandingClient() {
+             Trusted by Modern Founders
+           </span>
+           <h2 className="text-3xl sm:text-5xl font-black text-white tracking-tight">
+             Loved by Teams Shipping at <span className="text-gradient">AI Speed</span>
+           </h2>
+           <p className="text-base text-slate-300 max-w-2xl mx-auto font-medium">
+             See how high-velocity software startups protect their customer data without slowing down deployment.
+           </p>
+         </div>
+ 
+-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
++        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+           {[
+             {
+               quote: "We built our entire fintech dashboard in 3 weeks using Cursor. VibeAudit caught a Stripe webhook signature bypass 2 hours before our Product Hunt launch. Saved our company.",
+               author: "Marcus Vance",
+               role: "Co-Founder & CTO @ PayScale AI",
+               score: "98/100 VibeScore",
+             },
+-            {
+-              quote: "The autonomous PR generator is pure magic. Instead of just giving us a confusing PDF security report, VibeAudit opened 4 clean GitHub pull requests that fixed our SQL queries instantly.",
+-              author: "Elena Rostova",
+-              role: "Lead Engineer @ DataFlow Systems",
+-              score: "95/100 VibeScore",
+-            },
+             {
+               quote: "As an agency building Lovable and v0 prototypes for enterprise clients, VibeAudit is our secret weapon. We attach their A+ Security Audit badge to every client deliverable.",
+               author: "David Chen",
+               role: "Managing Director @ July SaaS Studio",
+               score: "99/100 VibeScore",
+             },
+           ].map((test, idx) => (
+             <motion.div
+               key={idx}
+               initial={{ opacity: 0, y: 30 }}
