@@ -7,9 +7,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
 cd "$SCRIPT_DIR/../.."
 
-pass=0; fail=0
-ok()  { printf '[PASS] %s\n' "$1"; pass=$((pass + 1)); }
-bad() { printf '[FAIL] %s\n' "$1"; fail=$((fail + 1)); }
+pass=0; fail=0; skipped=0
+ok()   { printf '[PASS] %s\n' "$1"; pass=$((pass + 1)); }
+bad()  { printf '[FAIL] %s\n' "$1"; fail=$((fail + 1)); }
+# skip <case name>: for a case that hard-depends on the real, gitignored
+# .codegraph/codegraph.db (absent on a fresh clone before anyone runs a
+# codegraph indexer). Counts toward neither pass nor fail -- verify.sh must
+# not go red on a fresh clone for a reason unrelated to what it's checking.
+skip() { printf '[skip] codegraph index absent: %s\n' "$1"; skipped=$((skipped + 1)); }
 is_deny() { printf '%s' "$1" | grep -q '"permissionDecision":"deny"'; }
 deny_reason() { printf '%s' "$1" | grep -o '"permissionDecisionReason":"[^"]*"' | sed -E 's/^[^:]*:"(.*)"$/\1/'; }
 # assert_deny_reason <gate output> <expected reason> <label>: fails if no
@@ -681,6 +686,182 @@ else
 fi
 rm -rf "$ship_scratch"
 
+# -- task-master.sh + codegraph-query.py (F5). A hermetic scratch repo with
+# its own copy of docs/plan.md and scripts/factory/{lib.sh,task-master.sh,
+# codegraph-query.py}, but pointed at the real (read-only) .codegraph db via
+# --db -- exactly the pattern the brief calls for: the scratch repo has no
+# source tree of its own, so codegraph-query.py's repo-root-from-db-path
+# resolution is what makes the real file reads work from inside it. --
+real_db="$PWD/.codegraph/codegraph.db"
+tm_scratch=$(mktemp -d)
+mkdir -p "$tm_scratch/scripts/factory" "$tm_scratch/docs"
+cp "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/task-master.sh" "$SCRIPT_DIR/codegraph-query.py" "$tm_scratch/scripts/factory/"
+chmod +x "$tm_scratch/scripts/factory/task-master.sh" "$tm_scratch/scripts/factory/codegraph-query.py"
+cp docs/plan.md "$tm_scratch/docs/plan.md"
+if [ -n "$tm_scratch" ] && (
+    cd "$tm_scratch" &&
+    git init -q &&
+    git config user.email selftest@example.invalid &&
+    git config user.name selftest &&
+    git add -A &&
+    git commit -q -m init
+  ) >/dev/null 2>&1
+then
+  plan_before=$(sha256sum "$tm_scratch/docs/plan.md")
+
+  out=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 2>&1)
+  rc=$?
+  if [ "$rc" -eq 2 ] && [ "$out" = "task-master: a lane is required: --lane micro|standard|high-risk" ] && [ ! -e "$tm_scratch/docs/tasks" ]; then
+    ok "task-master.sh without --lane exits 2 with the exact message and creates no folders or files"
+  else
+    tasks_exist=no; [ -e "$tm_scratch/docs/tasks" ] && tasks_exist=yes
+    bad "task-master.sh no lane: rc=$rc out='$out' docs/tasks exists=$tasks_exist"
+  fi
+
+  out=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane bogus 2>&1)
+  rc=$?
+  if [ "$rc" -eq 2 ]; then
+    ok "task-master.sh --lane bogus exits 2"
+  else
+    bad "task-master.sh --lane bogus: rc=$rc out='$out' (want rc=2)"
+  fi
+
+  expected_999="task-master: plan item 999 not found in docs/plan.md"
+  out=$(cd "$tm_scratch" && scripts/factory/task-master.sh 999 --lane high-risk 2>&1)
+  rc=$?
+  if [ "$rc" -eq 3 ] && [ "$out" = "$expected_999" ]; then
+    ok "task-master.sh with an unknown plan item exits 3 with the exact message"
+  else
+    bad "task-master.sh item 999: rc=$rc out='$out' (want rc=3, msg='$expected_999')"
+  fi
+
+  if [ -f "$real_db" ]; then
+    out=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$real_db" 2>&1)
+    rc=$?
+    draft_rel=$(printf '%s\n' "$out" | tail -1)
+    draft_path="$tm_scratch/$draft_rel"
+    plan_after=$(sha256sum "$tm_scratch/docs/plan.md")
+    folders_ok=1
+    for d in drafts queued active done blocked failed; do
+      [ -f "$tm_scratch/docs/tasks/$d/.gitkeep" ] || folders_ok=0
+    done
+    fm_keys=$(sed -n '2,11p' "$draft_path" 2>/dev/null | sed -E 's/^([a-zA-Z_]+):.*$/\1/')
+    expected_keys=$'id\ntitle\nlane\nstatus\napproval\nplan_item\nplan_status_owner\nsource\ncreated_at\nrunner_eligible'
+    if [ "$rc" -eq 0 ] && [ "$folders_ok" -eq 1 ] && [ -f "$draft_path" ] \
+       && [ "$plan_before" = "$plan_after" ] \
+       && [ "$fm_keys" = "$expected_keys" ] \
+       && grep -qx 'id: P4' "$draft_path" \
+       && grep -qx 'lane: high-risk' "$draft_path" \
+       && grep -qx 'status: draft' "$draft_path" \
+       && grep -qx 'approval: pending' "$draft_path" \
+       && grep -qx 'plan_item: 4' "$draft_path" \
+       && grep -qx 'plan_status_owner: runner' "$draft_path" \
+       && grep -qx 'source: docs/plan.md#4' "$draft_path" \
+       && grep -qx 'runner_eligible: false' "$draft_path" \
+       && grep -q 'lib/github/fetch-repo.ts' "$draft_path"
+    then
+      ok "task-master.sh 4 --lane high-risk creates the 6 queue folders (.gitkeep), writes the draft with the exact frontmatter key order, leaves docs/plan.md byte-identical, and mentions lib/github/fetch-repo.ts"
+    else
+      bad "task-master.sh real run: rc=$rc draft_path=$draft_path folders_ok=$folders_ok plan_before=$plan_before plan_after=$plan_after fm_keys='$fm_keys' (scratch kept at $tm_scratch for inspection)"
+    fi
+
+    expected_exists="task-master: draft already exists: $draft_rel (use --force to overwrite)"
+    out2=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$real_db" 2>&1)
+    rc2=$?
+    if [ "$rc2" -eq 4 ] && [ "$out2" = "$expected_exists" ]; then
+      ok "task-master.sh second run without --force exits 4 with the exact message"
+    else
+      bad "task-master.sh no-force rerun: rc=$rc2 out='$out2' (want rc=4, msg='$expected_exists')"
+    fi
+
+    out3=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$real_db" --force 2>&1)
+    rc3=$?
+    if [ "$rc3" -eq 0 ] && [ -f "$draft_path" ]; then
+      ok "task-master.sh --force overwrites an existing draft"
+    else
+      bad "task-master.sh --force rerun: rc=$rc3 out='$out3'"
+    fi
+
+    out4=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane micro --db "$real_db" --force 2>&1)
+    rc4=$?
+    if [ "$rc4" -eq 0 ] && grep -Eq 'WARNING: lane micro but touched paths match high-risk:.*lib/github/' "$draft_path"; then
+      ok "task-master.sh --lane micro on item 4 writes a lane-conflict WARNING naming lib/github/"
+    else
+      bad "task-master.sh lane-conflict case: rc=$rc4 (see $tm_scratch)"
+    fi
+
+    out6=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$real_db" --force --terms lib/github/app.ts,getInstallationOctokit,GITHUB_TOKEN 2>&1)
+    rc6=$?
+    if [ "$rc6" -eq 0 ] && grep -q 'lib/github/app.ts' "$draft_path" && grep -q 'getInstallationOctokit' "$draft_path"; then
+      ok "task-master.sh --terms lib/github/app.ts,getInstallationOctokit,GITHUB_TOKEN on item 4 produces a draft whose Codegraph Context names lib/github/app.ts and getInstallationOctokit"
+    else
+      bad "task-master.sh --terms case: rc=$rc6 (see $tm_scratch)"
+    fi
+  else
+    skip "task-master.sh 4 --lane high-risk --db <real> (real run)"
+    skip "task-master.sh second run without --force"
+    skip "task-master.sh --force overwrites"
+    skip "task-master.sh --lane micro lane-conflict WARNING"
+    skip "task-master.sh --terms lib/github/app.ts,getInstallationOctokit,GITHUB_TOKEN"
+  fi
+
+  # Independent of real_db (uses --db /nonexistent on purpose): derives its
+  # own draft path from its own output rather than reusing the guarded
+  # block's, since that block may not have run at all above.
+  out5=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db /nonexistent --force 2>&1)
+  rc5=$?
+  draft_path5="$tm_scratch/$(printf '%s\n' "$out5" | tail -1)"
+  if [ "$rc5" -eq 0 ] && grep -qx 'WARNING: codegraph unavailable, context section is empty' "$draft_path5"; then
+    ok "task-master.sh warns in Approval Notes when the codegraph db is unavailable, instead of failing"
+  else
+    bad "task-master.sh unavailable-db case: rc=$rc5 out='$out5'"
+  fi
+else
+  bad "selftest setup: could not build the scratch repo for the task-master.sh cases"
+fi
+rm -rf "$tm_scratch"
+
+cgq_err=$(mktemp)
+cgq_out=$(python3 "$SCRIPT_DIR/codegraph-query.py" --db /nonexistent search x 2>"$cgq_err")
+cgq_rc=$?
+cgq_err_lines=$(wc -l < "$cgq_err")
+if [ "$cgq_rc" -eq 1 ] && [ -z "$cgq_out" ] && [ "$cgq_err_lines" -eq 1 ]; then
+  ok "codegraph-query.py --db /nonexistent search x exits 1 with exactly one stderr line and empty stdout"
+else
+  bad "codegraph-query.py nonexistent db: rc=$cgq_rc out='$cgq_out' err_lines=$cgq_err_lines"
+fi
+rm -f "$cgq_err"
+
+if [ -f "$real_db" ]; then
+  cgq_json=$(python3 "$SCRIPT_DIR/codegraph-query.py" search fetchRepoFiles --json 2>/dev/null)
+  cgq_json_rc=$?
+  if [ "$cgq_json_rc" -eq 0 ] && printf '%s' "$cgq_json" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+assert isinstance(data, list) and len(data) > 0
+assert any(row.get("file_path") == "lib/github/fetch-repo.ts" for row in data)
+' 2>/dev/null; then
+    ok "codegraph-query.py search fetchRepoFiles --json returns a JSON array naming lib/github/fetch-repo.ts"
+  else
+    bad "codegraph-query.py search fetchRepoFiles --json: rc=$cgq_json_rc out='$cgq_json'"
+  fi
+
+  cgq_wild_out=$(python3 "$SCRIPT_DIR/codegraph-query.py" search 'a_b%' --json 2>/dev/null)
+  cgq_wild_rc=$?
+  if [ "$cgq_wild_rc" -eq 0 ] && printf '%s' "$cgq_wild_out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
+    ok "codegraph-query.py search 'a_b%' (unescaped LIKE metacharacters) does not crash and returns rc 0"
+  else
+    bad "codegraph-query.py search 'a_b%': rc=$cgq_wild_rc out='$cgq_wild_out'"
+  fi
+else
+  skip "codegraph-query.py search fetchRepoFiles --json"
+  skip "codegraph-query.py search 'a_b%' (LIKE metacharacter escaping)"
+fi
+
 echo
-echo "selftest: $pass passed, $fail failed"
+if [ "$skipped" -gt 0 ]; then
+  echo "selftest: $pass passed, $fail failed, $skipped skipped"
+else
+  echo "selftest: $pass passed, $fail failed"
+fi
 [ $fail -eq 0 ]

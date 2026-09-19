@@ -1,6 +1,6 @@
 # F5 — Add repo-local task-master skill for codegraph-aware task drafting
 
-Lane: high-risk (touches `scripts/factory/`, `.claude/`, `CLAUDE.md`, and defines a new artifact type the runner will later trust). Not a plan.md item. Status: brief only, not yet implemented.
+Lane: high-risk (touches `scripts/factory/`, `.claude/`, `CLAUDE.md`, and defines a new artifact type the runner will later trust). Not a plan.md item. Status: implemented 2026-09-19 (factory run 5).
 
 ## Goal
 A task-master skill that lives inside this repo and can be used by both Claude and Codex. It drafts code-aware task briefs from `docs/plan.md` items using the `.codegraph` index, but never implements, approves, or queues tasks. Drafting is the LLM's job; everything that can be deterministic (argument validation, folder creation, frontmatter skeleton, codegraph queries, staleness check) is a script so both harnesses behave identically.
@@ -123,3 +123,6 @@ Read-only; opens the db as described above; exits 1 with a one-line error on std
 
 ## Out of scope
 - Any runner that consumes `queued/`. Any change to the commit gate, ship.sh, verify.sh, or the hook. Re-indexing codegraph. Implementing plan item 4 itself.
+
+## Result
+Implementer (native subagent): DONE, then one fix round. Reviewer (native subagent, high-risk lane): FAIL on reproducibility (the bare script did not surface the installation Octokit helper, the operator token, or the repos lookup; the skill only said the assistant *may* query further), plus a selftest hard-dependency on the gitignored index, a stale worked example, and unescaped LIKE wildcards. All closed: SKILL.md and AGENTS.md now carry a mandatory follow-up-query step with a stop condition, the P4 draft was regenerated that way and records its queries, index-absent cases skip, wildcards escaped. Re-review PASS. Selftest 43 → 55. Accepted 2026-09-19.
