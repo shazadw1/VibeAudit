@@ -96,7 +96,7 @@ fi
 if [ $QUICK -eq 0 ]; then
   echo "-- verification baseline"
   verify_log=.factory/verify.log
-  if scripts/factory/verify.sh >"$verify_log" 2>&1; then
+  if scripts/factory/verify.sh --full >"$verify_log" 2>&1; then
     ok "verify.sh green (tsc, lint, tests)"
   elif [ -s "$verify_log" ]; then
     bad "verify.sh failed -> see $verify_log"

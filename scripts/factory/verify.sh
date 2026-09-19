@@ -1,11 +1,32 @@
 #!/usr/bin/env bash
 # Deterministic verification: selftest, typecheck, lint, unit tests.
 # Records a signed stamp (head + worktree fingerprint) for the commit gate.
+# Flags:
+#   --if-stale  exit 0 immediately with "VERIFY SKIPPED (stamp fresh)" when
+#               the current stamp already validates against HEAD/worktree
+#               (stamp_fresh); otherwise falls through to a normal run.
+#   --full      force selftest.sh to run regardless of factory_changed.
+# Without --full, selftest.sh only runs when scripts/factory/ itself has
+# changed (factory_changed); otherwise a skip line is printed instead.
 set -u
 set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
 cd "$SCRIPT_DIR/../.."
+
+if_stale=0; full=0
+for arg in "$@"; do
+  case "$arg" in
+    --if-stale) if_stale=1 ;;
+    --full) full=1 ;;
+    *) printf 'verify.sh: unknown argument: %s\n' "$arg" >&2; exit 2 ;;
+  esac
+done
+
+if [ "$if_stale" -eq 1 ] && stamp_fresh 2>/dev/null; then
+  echo "VERIFY SKIPPED (stamp fresh)"
+  exit 0
+fi
 
 stamp_file=.factory/last-verify.json
 stamp_tmp=.factory/last-verify.json.tmp
@@ -26,9 +47,21 @@ if ! err=$(ensure_factory_dir 2>&1); then
   red "VERIFY RED (${err:-.factory/ not usable})"
 fi
 
-echo "== selftest"
-if ! scripts/factory/selftest.sh; then
-  red "VERIFY RED (selftest failed)"
+if [ "$full" -eq 1 ]; then
+  run_selftest=1
+elif factory_changed; then
+  run_selftest=1
+else
+  run_selftest=0
+fi
+
+if [ "$run_selftest" -eq 1 ]; then
+  echo "== selftest"
+  if ! scripts/factory/selftest.sh; then
+    red "VERIFY RED (selftest failed)"
+  fi
+else
+  echo "== selftest (skipped: factory unchanged)"
 fi
 
 head=$(g rev-parse HEAD)

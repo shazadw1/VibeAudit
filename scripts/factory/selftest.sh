@@ -375,6 +375,312 @@ if [ -n "$stamp_backup" ]; then
   stamp_backup_check=""
 fi
 
+# -- (T7a) stamp_fresh: passes on a fresh stamp and fails with each of the
+# four reasons stamp_fresh documents. Isolated scratch repo (own HEAD, own
+# worktree, own .factory/) so this never depends on -- or disturbs -- the
+# real repo's stamp. lib.sh is sourced from this checkout by absolute path;
+# only the scratch repo's files are touched.
+stampfresh_scratch=$(mktemp -d)
+if [ -n "$stampfresh_scratch" ] && (
+    cd "$stampfresh_scratch" &&
+    git init -q &&
+    git config user.email selftest@example.invalid &&
+    git config user.name selftest &&
+    printf '.factory/\n' > .gitignore &&
+    echo base > base.txt &&
+    git add .gitignore base.txt &&
+    git commit -q -m init &&
+    mkdir -p .factory
+  ) >/dev/null 2>&1
+then
+  sf_real_head=$(cd "$stampfresh_scratch" && git rev-parse HEAD)
+  sf_real_fp=$(cd "$stampfresh_scratch" && . "$SCRIPT_DIR/lib.sh" && worktree_fingerprint)
+  sf_bad_head=$(printf '%040x' 1)
+  sf_bad_fp=$(printf '%064x' 1)
+
+  # stampfresh_assert <label> <expected reason, or "" for a pass> :
+  # captures only stderr (stdout is discarded -- stamp_fresh never writes
+  # to it) so the exact reason string can be asserted.
+  stampfresh_assert() {
+    local label="$1" expected="$2" out rc
+    out=$( ( cd "$stampfresh_scratch" && . "$SCRIPT_DIR/lib.sh" && stamp_fresh .factory/last-verify.json ) 2>&1 1>/dev/null )
+    rc=$?
+    if [ -z "$expected" ]; then
+      if [ "$rc" -eq 0 ] && [ -z "$out" ]; then ok "$label"; else bad "$label (rc=$rc out='$out', want rc=0 empty)"; fi
+    else
+      if [ "$rc" -ne 0 ] && [ "$out" = "$expected" ]; then ok "$label"; else bad "$label (rc=$rc out='$out', want rc!=0 reason='$expected')"; fi
+    fi
+  }
+
+  printf '{"status":"green","head":"%s","fingerprint":"%s","at":"2026-01-01T00:00:00Z"}' "$sf_real_head" "$sf_real_fp" > "$stampfresh_scratch/.factory/last-verify.json"
+  stampfresh_assert "stamp_fresh passes on a fresh stamp" ""
+
+  rm -f "$stampfresh_scratch/.factory/last-verify.json"
+  stampfresh_assert "stamp_fresh fails on a missing stamp" "stamp missing/malformed"
+
+  printf 'not json at all' > "$stampfresh_scratch/.factory/last-verify.json"
+  stampfresh_assert "stamp_fresh fails on malformed stamp content" "stamp missing/malformed"
+
+  printf '{"status":"red","head":"%s","fingerprint":"%s","at":"2026-01-01T00:00:00Z"}' "$sf_real_head" "$sf_real_fp" > "$stampfresh_scratch/.factory/last-verify.json"
+  stampfresh_assert "stamp_fresh fails on a non-green stamp" "stamp not green"
+
+  printf '{"status":"green","head":"%s","fingerprint":"%s","at":"2026-01-01T00:00:00Z"}' "$sf_bad_head" "$sf_real_fp" > "$stampfresh_scratch/.factory/last-verify.json"
+  stampfresh_assert "stamp_fresh fails when head does not match HEAD" "stamp head != HEAD"
+
+  printf '{"status":"green","head":"%s","fingerprint":"%s","at":"2026-01-01T00:00:00Z"}' "$sf_real_head" "$sf_bad_fp" > "$stampfresh_scratch/.factory/last-verify.json"
+  stampfresh_assert "stamp_fresh fails when fingerprint does not match worktree" "stamp fingerprint != worktree"
+else
+  bad "selftest setup: could not build the scratch repo for the stamp_fresh cases"
+fi
+rm -rf "$stampfresh_scratch"
+
+# -- (T7b) verify.sh --if-stale: hermetic scratch (own lib.sh/verify.sh, a
+# stubbed instant-pass selftest.sh and npx, matching the existing
+# redscratch pattern) -- runs a full check when the stamp is stale (no
+# stamp yet), skips on the very next run (now fresh), then runs again once
+# the tree changes.
+ifstale_scratch=$(mktemp -d)
+mkdir -p "$ifstale_scratch/scripts/factory" "$ifstale_scratch/fakebin"
+cp "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/verify.sh" "$ifstale_scratch/scripts/factory/"
+chmod +x "$ifstale_scratch/scripts/factory/verify.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ifstale_scratch/scripts/factory/selftest.sh"
+chmod +x "$ifstale_scratch/scripts/factory/selftest.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ifstale_scratch/fakebin/npx"
+chmod +x "$ifstale_scratch/fakebin/npx"
+if [ -n "$ifstale_scratch" ] && (
+    cd "$ifstale_scratch" &&
+    git init -q &&
+    git config user.email selftest@example.invalid &&
+    git config user.name selftest &&
+    printf '.factory/\n' > .gitignore &&
+    echo base > base.md &&
+    git add base.md .gitignore &&
+    git commit -q -m init
+  ) >/dev/null 2>&1
+then
+  out1=$(cd "$ifstale_scratch" && PATH="$ifstale_scratch/fakebin:$PATH" scripts/factory/verify.sh --if-stale 2>&1)
+  rc1=$?
+  out2=$(cd "$ifstale_scratch" && PATH="$ifstale_scratch/fakebin:$PATH" scripts/factory/verify.sh --if-stale 2>&1)
+  rc2=$?
+  if [ "$rc1" -eq 0 ] && printf '%s\n' "$out1" | grep -qx 'VERIFY GREEN' && [ "$rc2" -eq 0 ] && [ "$out2" = "VERIFY SKIPPED (stamp fresh)" ]; then
+    ok "verify.sh --if-stale runs a full check when stale, then skips (exact line) when fresh"
+  else
+    bad "verify.sh --if-stale rc1=$rc1 rc2=$rc2 out2='$out2' (want run-then-skip)"
+  fi
+
+  echo 'x' > "$ifstale_scratch/app.ts"
+  out3=$(cd "$ifstale_scratch" && PATH="$ifstale_scratch/fakebin:$PATH" scripts/factory/verify.sh --if-stale 2>&1)
+  rc3=$?
+  if [ "$rc3" -eq 0 ] && printf '%s\n' "$out3" | grep -qx 'VERIFY GREEN' && [ "$out3" != "VERIFY SKIPPED (stamp fresh)" ]; then
+    ok "verify.sh --if-stale runs (does not skip) once the tree changes"
+  else
+    bad "verify.sh --if-stale rc3=$rc3 out3='$out3' after a tree change (want a full GREEN run)"
+  fi
+else
+  bad "selftest setup: could not build the scratch repo for the --if-stale case"
+fi
+rm -rf "$ifstale_scratch"
+
+# -- (T7c) selftest skip line: same hermetic-scratch pattern. verify.sh
+# (no flags) must print the exact skip line when scripts/factory is
+# unchanged since HEAD, and must run selftest.sh (exact "== selftest" line,
+# no skip line) once scripts/factory itself changes.
+skipline_scratch=$(mktemp -d)
+mkdir -p "$skipline_scratch/scripts/factory" "$skipline_scratch/fakebin"
+cp "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/verify.sh" "$skipline_scratch/scripts/factory/"
+chmod +x "$skipline_scratch/scripts/factory/verify.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$skipline_scratch/scripts/factory/selftest.sh"
+chmod +x "$skipline_scratch/scripts/factory/selftest.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$skipline_scratch/fakebin/npx"
+chmod +x "$skipline_scratch/fakebin/npx"
+if [ -n "$skipline_scratch" ] && (
+    cd "$skipline_scratch" &&
+    git init -q &&
+    git config user.email selftest@example.invalid &&
+    git config user.name selftest &&
+    printf '.factory/\n' > .gitignore &&
+    git add -A &&
+    git commit -q -m init
+  ) >/dev/null 2>&1
+then
+  out=$(cd "$skipline_scratch" && PATH="$skipline_scratch/fakebin:$PATH" scripts/factory/verify.sh 2>&1)
+  if printf '%s\n' "$out" | grep -qx '== selftest (skipped: factory unchanged)' && ! printf '%s\n' "$out" | grep -qx '== selftest'; then
+    ok "verify.sh prints the exact selftest-skipped line when scripts/factory is unchanged"
+  else
+    bad "verify.sh output did not show the expected skip line when factory unchanged: $out"
+  fi
+
+  echo '# touch' >> "$skipline_scratch/scripts/factory/verify.sh"
+  out2=$(cd "$skipline_scratch" && PATH="$skipline_scratch/fakebin:$PATH" scripts/factory/verify.sh 2>&1)
+  if printf '%s\n' "$out2" | grep -qx '== selftest' && ! printf '%s\n' "$out2" | grep -qx '== selftest (skipped: factory unchanged)'; then
+    ok "verify.sh runs selftest (no skip line) once scripts/factory changes"
+  else
+    bad "verify.sh output did not run selftest after a factory change: $out2"
+  fi
+else
+  bad "selftest setup: could not build the scratch repo for the selftest-skip-line case"
+fi
+rm -rf "$skipline_scratch"
+
+# -- (T7d) gate_check parity: the hook wrapper (commit-gate.sh, JSON deny)
+# and a direct call to gate_check (no JSON, no hook) must deny the same
+# scenario with the identical reason string -- proving gate_check really is
+# the single source of truth, not a copy.
+gatecheck_scratch=$(mktemp -d)
+if [ -n "$gatecheck_scratch" ] && (
+    mkdir -p "$gatecheck_scratch/scripts/factory" &&
+    cp "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/commit-gate.sh" "$gatecheck_scratch/scripts/factory/" &&
+    chmod +x "$gatecheck_scratch/scripts/factory/commit-gate.sh" &&
+    cd "$gatecheck_scratch" &&
+    git init -q &&
+    git config user.email selftest@example.invalid &&
+    git config user.name selftest &&
+    echo base > base.md &&
+    git add base.md &&
+    git commit -q -m init &&
+    echo 'x' > app.ts &&
+    git add app.ts
+  ) >/dev/null 2>&1
+then
+  expected="commit gate: verify stamp missing or malformed, re-run verify.sh"
+  wrapper_out=$(commit_payload "git commit -m x" | "$gatecheck_scratch/scripts/factory/commit-gate.sh")
+  wrapper_reason=$(deny_reason "$wrapper_out")
+  if is_deny "$wrapper_out" && [ "$wrapper_reason" = "$expected" ]; then
+    ok "gate_check denies via the hook wrapper with the expected reason"
+  else
+    bad "gate_check via wrapper: out='$wrapper_out' (want deny reason '$expected')"
+  fi
+
+  direct_reason=$( (cd "$gatecheck_scratch" && . scripts/factory/lib.sh && gate_check "git commit") )
+  direct_rc=$?
+  if [ "$direct_rc" -ne 0 ] && [ "$direct_reason" = "$expected" ]; then
+    ok "gate_check denies the same way called directly (no hook wrapper)"
+  else
+    bad "gate_check direct: rc=$direct_rc reason='$direct_reason' (want rc!=0 reason='$expected')"
+  fi
+else
+  bad "selftest setup: could not build the scratch repo for the gate_check wrapper/direct parity case"
+fi
+rm -rf "$gatecheck_scratch"
+
+# -- (T7e) ship.sh: hermetic scratch, npx stubbed so verify's outcome is
+# controllable without running real tsc/lint/vitest. Covers: refuses -a /
+# --amend / --no-verify with an exact usage error and no commit; refuses
+# (via verify.sh --if-stale) on a red/missing stamp and never commits;
+# refuses (via its own gate_check call) a secret-looking staged file even
+# when verify itself would be green -- the case a reviewer would look for
+# to prove ship.sh cannot commit without going through the same checks;
+# and commits with the new short SHA printed and git log advanced once
+# everything is green; and (fix round 1, finding 2) `-- <paths>` refuses
+# with an exact message when an untracked non-doc file remains alongside
+# what was staged, but still commits when the only leftover is a .md file.
+ship_scratch=$(mktemp -d)
+mkdir -p "$ship_scratch/scripts/factory" "$ship_scratch/fakebin"
+cp "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/verify.sh" "$SCRIPT_DIR/ship.sh" "$ship_scratch/scripts/factory/"
+chmod +x "$ship_scratch/scripts/factory/verify.sh" "$ship_scratch/scripts/factory/ship.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ship_scratch/scripts/factory/selftest.sh"
+chmod +x "$ship_scratch/scripts/factory/selftest.sh"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$ship_scratch/fakebin/npx"
+chmod +x "$ship_scratch/fakebin/npx"
+if [ -n "$ship_scratch" ] && (
+    cd "$ship_scratch" &&
+    git init -q &&
+    git config user.email selftest@example.invalid &&
+    git config user.name selftest &&
+    printf '.factory/\nfakebin/\n' > .gitignore &&
+    git add -A &&
+    git commit -q -m init
+  ) >/dev/null 2>&1
+then
+  ship_head_before=$(cd "$ship_scratch" && git rev-parse HEAD)
+
+  for bad_flag in -a --amend --no-verify; do
+    expected_msg="ship.sh: $bad_flag is not accepted -- ship.sh always stages, verifies, and gates first"
+    out=$(cd "$ship_scratch" && PATH="$ship_scratch/fakebin:$PATH" scripts/factory/ship.sh "$bad_flag" -m x 2>&1)
+    rc=$?
+    first_line=$(printf '%s\n' "$out" | head -1)
+    head_after=$(cd "$ship_scratch" && git rev-parse HEAD)
+    if [ "$rc" -eq 2 ] && [ "$head_after" = "$ship_head_before" ] && [ "$first_line" = "$expected_msg" ]; then
+      ok "ship.sh refuses $bad_flag with an exact usage error and does not commit"
+    else
+      bad "ship.sh $bad_flag: rc=$rc first_line='$first_line' head_after='$head_after' (want rc=2, msg='$expected_msg', head unchanged)"
+    fi
+  done
+
+  echo 'x' > "$ship_scratch/app.ts"
+  out=$(cd "$ship_scratch" && PATH="$ship_scratch/fakebin:$PATH" scripts/factory/ship.sh -m "should not land" 2>&1)
+  rc=$?
+  head_after=$(cd "$ship_scratch" && git rev-parse HEAD)
+  if [ "$rc" -ne 0 ] && [ "$head_after" = "$ship_head_before" ] && printf '%s\n' "$out" | grep -qx 'VERIFY RED'; then
+    ok "ship.sh refuses to commit (via verify.sh --if-stale) on a red/missing stamp"
+  else
+    bad "ship.sh on red verify: rc=$rc out='$out' head_after='$head_after' (want rc!=0, head unchanged, VERIFY RED in output)"
+  fi
+
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$ship_scratch/fakebin/npx"
+  printf 'placeholder value, not a real secret\n' > "$ship_scratch/.env.local"
+  out=$(cd "$ship_scratch" && PATH="$ship_scratch/fakebin:$PATH" scripts/factory/ship.sh -m "secret should not land" 2>&1)
+  rc=$?
+  head_after=$(cd "$ship_scratch" && git rev-parse HEAD)
+  rm -f "$ship_scratch/.env.local"
+  if [ "$rc" -ne 0 ] && [ "$head_after" = "$ship_head_before" ] && printf '%s\n' "$out" | grep -qx 'commit gate: secret-looking file staged'; then
+    ok "ship.sh refuses (via its own gate_check call) a secret-looking staged file even though verify is green"
+  else
+    bad "ship.sh secret case: rc=$rc out='$out' head_after='$head_after' (want rc!=0, head unchanged, gate reason in output)"
+  fi
+  git -C "$ship_scratch" reset -q --hard "$ship_head_before" >/dev/null 2>&1
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$ship_scratch/fakebin/npx"
+  echo 'real change' > "$ship_scratch/final.txt"
+
+  out=$(cd "$ship_scratch" && PATH="$ship_scratch/fakebin:$PATH" scripts/factory/ship.sh -m "real commit" 2>&1)
+  rc=$?
+  new_head=$(cd "$ship_scratch" && git rev-parse HEAD)
+  new_short=$(cd "$ship_scratch" && git rev-parse --short HEAD)
+  log_msg=$(cd "$ship_scratch" && git log -1 --format=%s)
+  if [ "$rc" -eq 0 ] && [ "$new_head" != "$ship_head_before" ] && [ "$log_msg" = "real commit" ] && printf '%s\n' "$out" | grep -qx "$new_short"; then
+    ok "ship.sh commits, prints the new short SHA, and git log advances when everything is green"
+  else
+    bad "ship.sh on green: rc=$rc out='$out' new_head='$new_head' log_msg='$log_msg' (want rc=0, HEAD advanced, SHA printed)"
+  fi
+
+  # -- (fix round 1, finding 2) `ship.sh -- <paths>` must refuse when an
+  # untracked (or otherwise unstaged) non-doc file remains in the worktree
+  # alongside what was staged -- verify.sh's fingerprint covers the whole
+  # worktree diff against HEAD, so it would go green even though that
+  # leftover file was never part of what gets committed.
+  base_head="$new_head"
+  echo p1 > "$ship_scratch/p1.ts"
+  echo p2 > "$ship_scratch/p2.ts"
+  out=$(cd "$ship_scratch" && PATH="$ship_scratch/fakebin:$PATH" scripts/factory/ship.sh -m partial -- p1.ts 2>&1)
+  rc=$?
+  head_after=$(cd "$ship_scratch" && git rev-parse HEAD)
+  expected_msg="ship: unverified non-doc changes remain in the worktree (stage them or stash them): p2.ts"
+  if [ "$rc" -eq 3 ] && [ "$head_after" = "$base_head" ] && [ "$out" = "$expected_msg" ]; then
+    ok "ship.sh -- <paths> refuses (exact message, HEAD unchanged) when an untracked non-doc file remains"
+  else
+    bad "ship.sh -- p1.ts with untracked p2.ts: rc=$rc out='$out' head_after='$head_after' (want rc=3, msg='$expected_msg', head unchanged)"
+  fi
+  rm -f "$ship_scratch/p1.ts" "$ship_scratch/p2.ts"
+  git -C "$ship_scratch" reset -q --hard "$base_head" >/dev/null 2>&1
+
+  # Same shape, but the only thing left behind is a .md file (exempt) --
+  # must commit normally.
+  echo p1 > "$ship_scratch/p1.ts"
+  echo notes > "$ship_scratch/notes.md"
+  out=$(cd "$ship_scratch" && PATH="$ship_scratch/fakebin:$PATH" scripts/factory/ship.sh -m "partial with doc leftover" -- p1.ts 2>&1)
+  rc=$?
+  head_after=$(cd "$ship_scratch" && git rev-parse HEAD)
+  if [ "$rc" -eq 0 ] && [ "$head_after" != "$base_head" ] && [ -e "$ship_scratch/notes.md" ]; then
+    ok "ship.sh -- <paths> commits normally when only an untracked .md file remains"
+  else
+    bad "ship.sh -- p1.ts with untracked notes.md: rc=$rc out='$out' head_after='$head_after' (want rc=0, HEAD advanced, notes.md left alone)"
+  fi
+  rm -f "$ship_scratch/notes.md"
+else
+  bad "selftest setup: could not build the scratch repo for the ship.sh cases"
+fi
+rm -rf "$ship_scratch"
+
 echo
 echo "selftest: $pass passed, $fail failed"
 [ $fail -eq 0 ]
