@@ -48,5 +48,9 @@ next-env.d.ts
 # trailing slash matches directories only.
 .*/
 
-# Internal planning and phase tracking. Development artefacts, not product.
-docs/
+# Coding factory: track hooks and subagents, ignore local/runtime state
+!.claude/
+.claude/*
+!.claude/settings.json
+!.claude/agents/
+.factory/

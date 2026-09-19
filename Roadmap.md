@@ -1,44 +1,83 @@
-# Roadmap — Remaining Work Disclosed at Time of Sale
+# Roadmap — Launch Phases From Listing Audit
 
-This documents functionality claimed in the individual Flippa listing ([original_description.md](original_description.md)) that the code audit ([FINDINGS.md](FINDINGS.md)) found to be incomplete or not built. Unlike Voxorio, several of these gaps were **not** disclosed in this specific listing text — they only surfaced via a separate "Honest Disclosure" section on a bundled listing sold alongside Voxorio, and via direct code inspection. Tracking here as forward work and as a record of the discrepancy.
+This documents functionality claimed in the individual Flippa listing ([original_description.md](original_description.md)) that the code audit ([FINDINGS.md](FINDINGS.md)) found to be incomplete or not built. The work is ordered by launch risk, not by feature attractiveness.
 
-## 1. Autonomous PR Fix Engine — claimed working, confirmed NOT implemented
+## Phase 0 — Production Blockers
 
-**Claimed here:** "Autonomous PR Fix Engine: ...it writes parameterized query replacements and server-side validation logic, opening a clean GitHub PR automatically." The promo video demo (00:47–01:38) shows a score jumping from 58 to 99/A+ after "VibeAudit didn't just flag the problem. It already opened the fix," walking through a real-looking PR diff for a SQL-injection fix, ending with "Merge it to GitHub."
+**Launch state:** Do not launch publicly with current marketing claims. Use private staging or a clearly labelled beta only.
 
-**Actual status (confirmed in code):** `app/api/fix/generate/route.ts` returns an explicitly flagged simulated response (`{simulated: true, status: "not_implemented"}`). No real PR is ever opened. The Anthropic SDK is installed and route structure exists, but AI patch generation and PR creation still need to be built.
+1. **Marketing honesty blocker**
+   - Autonomous PR generation is demoed and testified as working, but the backend returns `simulated: true` / `not_implemented`.
+   - Launch gate: either implement real PR generation or remove/label every claim, testimonial, and demo assertion as simulated.
 
-**This is the single biggest gap between the listing/demo and the shipped code** — it's presented as a signature, already-working feature (and shown "live" in the promo video) rather than disclosed as incomplete. This item alone should be central to any post-sale conversation with the seller.
+2. **Billing and entitlement safety**
+   - Verify checkout, portal, subscription lifecycle, webhook idempotency, and upgrade behavior.
+   - Launch gate: users cannot create duplicate active subscriptions during upgrades, unknown Stripe prices fail safely, and paid features enforce server-side entitlement.
 
-**Work to do:** Build the actual patch-generation logic (Anthropic SDK call to produce a diff for a given finding) and wire it to Octokit's PR-creation API, replacing the simulated response.
+3. **Profile/admin hardening**
+   - Verify user profile plan state cannot be escalated outside trusted webhook/admin paths.
+   - Launch gate: admin/commercial settings are restricted and audit logged.
 
-## 2. Four dashboard pages — claimed as live product surfaces, confirmed fixture-only
+4. **Commercial launch controls**
+   - Plans, limits, internal scan/AI budgets, provider pricing, fix-generation costs, coupons, and promotion rules must be database-backed and editable by the instance admin.
 
-**Claimed here:** "Analytics tracks your fleet score over time by attack vector. Compliance maps every control to SOC 2, ISO 27001, GDPR, and HIPAA with evidence attached. Fleet topology maps your architecture across every cloud."
+## Phase 1 — Minimum Paid Launch
 
-**Actual status (confirmed in code):** `components/dashboard/{fleet,redteam,analytics,compliance}-client.tsx` — 1,908 lines total, all hardcoded fixture arrays (e.g. `INITIAL_NODES` in fleet-client.tsx), no calls to real backend/API endpoints.
+**Launch state:** Limited paid launch is acceptable after Phase 0 passes and the product is honest about incomplete premium features.
 
-**Work to do:** Build the backing data model and API routes for each of the four pages (fleet topology from real connected-repo/cloud metadata, compliance control mapping with real evidence links, analytics from real historical scan data, Red Team Arena scenario engine), then wire the existing UI to live data.
+1. **Plan and usage limits**
+   - Define per-plan scan limits, repo limits, fix-generation limits, monitoring cadence, team seats, export/certificate limits, and API limits.
+   - Enforce daily/monthly limits server-side and record cost for scans and AI-assisted fixes.
 
-## 3. Continuous monitoring — webhook received but no auto re-scan
+2. **Coupons and launch promotions**
+   - Support percentage off for life, fixed price for life, fixed monthly discount/price, one-off discount, and first-N-month promotions.
+   - Include redemption caps, eligibility, expiry, Stripe sync behavior, abuse controls, and audit logs.
 
-**Claimed here (video, 01:38):** "Monitoring catches risky pushes before they merge."
+3. **Operator reporting**
+   - Add visibility for MRR, scan volume, AI/fix-generation cost, coupon usage, failed webhooks, failed payments, high-risk accounts, and GitHub integration failures.
 
-**Actual status (confirmed in code):** `app/api/github/webhook/route.ts` correctly verifies and receives `push` events, but the handler only logs them — no scan is actually triggered on push.
+## Phase 2 — Product Claim Alignment
 
-**Work to do:** Wire the `push` event handler to enqueue a re-scan of the affected repo, and surface results before merge (e.g. as a GitHub status check).
+**Launch state:** Broader marketing launch when signature features are real.
 
-## 4. Items claimed but not independently verified — need follow-up
+1. Build real Autonomous PR Fix Engine or reposition it as beta/simulated.
+2. Wire fleet, red-team, analytics, and compliance dashboards to real data.
+3. Trigger auto re-scans and GitHub checks on push events.
+4. Verify certificates, Copilot/security Q&A, sandbox preview, and scan-worker claims before marketing them.
+5. Remove or clarify the promo video mismatch around "Vanta Audit" and "thebeautytie.com".
 
-- **Downloadable Executive Security Certificates** ("cryptographic, verifiable A+ Grade compliance audits") — public certificate pages/routes exist, but the generation logic and cryptographic verification claim were not deep-audited; confirm before marketing this as "cryptographic."
-- **"Copilot answers security questions about your codebase on demand"** (video, 02:04) — no dedicated chat/Copilot feature was found during the audit; may exist under a different name, or may be aspirational demo content. Needs direct verification against the running app.
-- **"Interactive Sandbox Preview" on the landing page** (lets visitors test simulated scans without signing up) — not verified either way.
-- **Scan-worker service** — confirmed a placeholder stub in code (6-line stub, "future expansion" comment), not required for the 9 built-in detection rules, so this is lower priority than a customer-facing gap.
+## Phase 3 — Product Expansion
 
-## Also flagged (not a code gap, but a listing discrepancy)
+**Launch state:** Post-MVP differentiation after scans, billing, and claims are stable.
 
-The promotional video's closing line names the product "**Vanta Audit**" and directs viewers to "**thebeautytie.com**" — neither matches VibeAudit AI / vibeauditai.com. Worth clarifying with the seller whether this is a transcription error or a sign the promo video was reused/templated from an unrelated project.
+1. Add deeper rule packs, custom policies, richer compliance evidence, enterprise reporting, and team workflows.
+2. Build a controlled fix-review workflow before opening or updating PRs.
+3. Add historical risk trends, fleet topology from real integrations, and customer-visible remediation SLAs.
 
-## Not on this list
+---
 
-The 9 detection rules, RLS/HMAC/Stripe/rate-limiting infrastructure, GitHub OAuth + magic-link login, and GitHub App repo sync were all independently verified as genuinely implemented in [FINDINGS.md](FINDINGS.md). No further gaps found there.
+## Detailed Audit Items
+
+### 1. Autonomous PR Fix Engine — claimed working, confirmed not implemented
+
+`app/api/fix/generate/route.ts` returns an explicitly flagged simulated response. No real PR is opened. The Anthropic SDK and route structure exist, but AI patch generation and PR creation still need to be built.
+
+### 2. Four dashboard pages — fixture-only
+
+`components/dashboard/{fleet,redteam,analytics,compliance}-client.tsx` use hardcoded fixture arrays and have no real backend/API integration.
+
+### 3. Continuous monitoring — webhook received but no auto re-scan
+
+`app/api/github/webhook/route.ts` verifies and receives `push` events, but only logs them. It does not trigger a scan or GitHub status check.
+
+### 4. Claimed but not independently verified
+
+Downloadable executive security certificates, Copilot/security Q&A, interactive sandbox preview, and the scan-worker service need direct verification before marketing.
+
+## Also Flagged
+
+The promotional video closes with "Vanta Audit" / "thebeautytie.com" instead of VibeAudit AI / vibeauditai.com. Clarify whether this is a transcription artifact or reused asset.
+
+## Not On This List
+
+The 9 detection rules, RLS/HMAC/Stripe/rate-limiting infrastructure, GitHub OAuth + magic-link login, and GitHub App repo sync were independently verified as genuinely implemented in [FINDINGS.md](FINDINGS.md).

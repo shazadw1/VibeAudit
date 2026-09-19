@@ -1,57 +1,124 @@
-# Fix & Completion Plan — VibeAudit
+# Phased Fix & Completion Plan — VibeAudit
 
-References: [../FINDINGS.md](../FINDINGS.md) · [../original_description.md](../original_description.md) · [../Roadmap.md](../Roadmap.md)
+References: [../FINDINGS.md](../FINDINGS.md) · [../original_description.md](../original_description.md) · [../Roadmap.md](../Roadmap.md) · [checklist.md](checklist.md)
 
-No security issues were found in VibeAudit's own code. The main gap is that the headline "Autonomous PR Fix Engine" is demoed as working in the promo video but is an explicitly simulated response in the code.
+The main launch risk is product honesty: the headline "Autonomous PR Fix Engine" is demoed as working in the promo video but is explicitly simulated in code. The second launch risk is commercial readiness: billing, plan limits, coupons, and admin-editable commercial settings must be verified before paid traffic.
 
-## Status legend
-`Not Started` · `In Progress` · `Done`
+## Status Legend
+
+`Not Started` · `In Progress` · `Done` · `Needs Verification`
+
+## Phase Gates
+
+| Phase | Launch meaning | Gate |
+|---|---|---|
+| Phase 0 — Production Blockers | Private staging or clearly labelled beta only | Marketing honesty, billing safety, admin hardening, webhook idempotency, and commercial controls are addressed |
+| Phase 1 — Minimum Paid Launch | Limited public paid launch | Plans, scan/fix limits, coupons, usage accounting, and operator reporting are operational |
+| Phase 2 — Product Claim Alignment | Broader marketing launch | Autonomous PRs, dashboards, monitoring, certificates, Copilot, and sandbox claims are real or corrected |
+| Phase 3 — Expansion | Post-MVP | Enterprise security workflows, richer integrations, and historical risk intelligence |
 
 ---
+
+## Phase 0 — Production Blockers
 
 ### 1. Fix the fabricated testimonial on the landing page
 - **Status:** Not Started
-- **Priority:** High (active honesty problem, trivial to fix)
-- **Effort:** Trivial
-- **What:** `components/marketing/landing-client.tsx:1293` has a customer quote claiming the "autonomous PR generator... opened 4 clean GitHub pull requests" — remove or rewrite this, since the backend itself honestly labels the same feature `not_implemented`.
-- **Reference:** Roadmap.md, "Also flagged" section
+- **Priority:** Critical
+- **What:** `components/marketing/landing-client.tsx` includes a customer quote claiming the autonomous PR generator opened GitHub PRs. Remove/rewrite it while the backend returns `not_implemented`.
 
-### 2. Build the real Autonomous PR Fix Engine
+### 2. Verify billing and entitlement safety
 - **Status:** Not Started
-- **Priority:** High (this is the product's core marketed feature)
-- **Effort:** Large — multi-day. Needs real AI patch generation per finding type (9 rules × patch templates) via the already-installed Anthropic SDK, plus Octokit PR creation, plus a diff-review UI flow before merge.
-- **What:** Replace the simulated response in `app/api/fix/generate/route.ts` (`{simulated: true, status: "not_implemented"}`) with real patch generation and PR creation.
-- **Reference:** Roadmap.md §1
+- **Priority:** Critical
+- **What:** Verify Stripe price resolution, checkout, customer portal, subscription updates, cancelation, failed payment states, webhook signature validation, webhook idempotency, and entitlement enforcement.
+- **Launch check:** Upgrades modify one existing subscription and cannot create duplicate active subscriptions.
 
-### 3. Wire the 4 fixture-only dashboard pages to real data
+### 3. Add admin-editable commercial settings
 - **Status:** Not Started
-- **Priority:** Medium
-- **Effort:** Large — ~1,900 lines of UI already exist (`components/dashboard/{fleet,redteam,analytics,compliance}-client.tsx`), but each needs its own real backend data model + API route. Treat as 4 separate medium tasks.
-- **What:** Fleet topology from real connected-repo/cloud metadata; Compliance control mapping with real evidence; Analytics from real historical scan data; Red Team Arena scenario engine.
-- **Reference:** Roadmap.md §2
+- **Priority:** Critical
+- **What:** Store plans, limits, included scan/fix budgets, provider pricing, coupon rules, and feature flags in the database with an instance-admin UI.
+- **Launch check:** Admin can change commercial policy without code edits or redeploying.
 
-### 4. Wire auto re-scan on push
+### 4. Scope repository fetching to the GitHub App installation
 - **Status:** Not Started
-- **Priority:** Medium
-- **Effort:** Small — webhook signature verification and event receipt already work; just needs the `push` handler to enqueue a scan instead of only logging.
-- **What:** `app/api/github/webhook/route.ts` — trigger the existing scan pipeline on `push` events, surface results as a GitHub status check.
-- **Reference:** Roadmap.md §3
+- **Priority:** Critical
+- **What:** `lib/github/fetch-repo.ts` authenticates with a single operator token, not the installation Octokit; any logged-in user can scan any repo that token can read, and rows are stored with `installation_id: 0`. Resolve repos to the requester's `repos` row, fetch through the installation token, and restrict `app/svc/scan` to unauthenticated public reads. See [implementation_plan.md §0.1](implementation_plan.md#part-0--prerequisites-surfaced-in-review).
+- **Launch check:** User A cannot trigger a scan of a repo not connected to their own installation, via either route.
 
-### 5. Verify/clarify claimed-but-unconfirmed features
+### 5. Label or remove the fixture Copilot page's fabricated claims
 - **Status:** Not Started
-- **Priority:** Low
-- **Effort:** Small (investigation, not necessarily a build)
-- **What:** Confirm whether "cryptographic" security certificates, the "Copilot" chat feature, and the "Interactive Sandbox Preview" landing page actually exist as described, or need building/correcting.
-- **Reference:** Roadmap.md §4
-
-### 6. Clarify promo video discrepancy
-- **Status:** Not Started
-- **Priority:** Low
-- **Effort:** Not a code task — raise with seller
-- **What:** Promo video closes with "Vanta Audit" / "thebeautytie.com" instead of VibeAudit AI / vibeauditai.com. Confirm whether this is a transcription artifact or a reused asset.
-- **Reference:** original_description.md, promo video note
+- **Priority:** Critical
+- **What:** `components/dashboard/copilot-client.tsx` (502 lines, fixture-only) returns canned replies claiming an "Autonomous PR #117" was opened and that analysis ran "in volatile AWS Nitro memory". Same honesty problem as the testimonial in item 1. Label the page demo or remove the fabricated content. Note: [Roadmap.md](../Roadmap.md) §4 says no Copilot feature was found; this page is it.
 
 ---
 
-## Not in scope for this plan
-The 9 detection rules, RLS/HMAC/Stripe/rate-limiting infrastructure, GitHub OAuth + magic-link login, and GitHub App repo sync were independently verified as genuinely implemented — see FINDINGS.md. No action needed.
+## Phase 1 — Minimum Paid Launch
+
+### 6. Define and enforce plan usage limits
+- **Status:** Not Started
+- **Priority:** Critical
+- **What:** Set daily/monthly limits for scans, connected repos, monitored repos, fix-generation attempts, certificates, exports, API usage, and team seats.
+- **Launch check:** Limits are enforced server-side for UI and direct API calls.
+
+### 7. Implement coupons and launch promotions
+- **Status:** Not Started
+- **Priority:** Critical
+- **What:** Support percentage off for life, fixed price for life, fixed monthly discount/price, one-off discount, and first-N-month discounts.
+- **Launch check:** Coupon eligibility, redemption caps, expiry, Stripe sync, audit logs, and abuse controls are server-side.
+
+### 8. Add operator reporting
+- **Status:** Not Started
+- **Priority:** High
+- **What:** Show MRR, active subscriptions, scan volume, AI/fix-generation cost, coupon usage, failed webhooks, failed payments, high-usage accounts, and GitHub integration failures.
+
+---
+
+## Phase 2 — Product Claim Alignment
+
+### 9. Build the real Autonomous PR Fix Engine
+- **Status:** Not Started
+- **Priority:** High
+- **What:** Replace the simulated response in `app/api/fix/generate/route.ts` with real patch generation and GitHub PR creation, or explicitly mark the feature beta/simulated in product copy. Design constraints in [implementation_plan.md §0.4](implementation_plan.md#part-0--prerequisites-surfaced-in-review): pin to the scanned SHA, separate write permissions, validate the diff, treat repo content as untrusted prompt input, idempotency per finding+SHA. Decide fix metering first — see [competitor_research.md §(d)](competitor_research.md#d-unit-economics-of-real-autofix--added-in-review).
+
+### 10. Wire the four fixture-only dashboard pages to real data
+- **Status:** Not Started
+- **Priority:** Medium
+- **What:** Build backend data/API support for Fleet, Red Team, Analytics, and Compliance dashboards.
+
+### 11. Add finding suppression, baseline mode, and scoring revision
+- **Status:** Not Started
+- **Priority:** High
+- **What:** Inline `vibeaudit-ignore` comments, a `.vibeaudit.yml` for per-rule enable/severity/path excludes, and a diff-baseline mode; revise `lib/scan/scorer.ts` (dedupe, per-category caps) before rule packs widen. Prerequisite for the CI gate in the next item. See [implementation_plan.md §0.2–0.3](implementation_plan.md#part-0--prerequisites-surfaced-in-review).
+- **Launch check:** A repo with the current false-positive-prone `missing-auth` hits can suppress them and still pass the gate.
+
+### 12. Wire auto re-scan on push
+- **Status:** Not Started
+- **Priority:** Medium
+- **What:** Trigger the scan pipeline from verified GitHub `push` webhooks and surface results as GitHub Check Runs with annotations. Constraints: respond `202` within GitHub's 10-second delivery timeout and process out-of-band; dedupe on delivery ID; do not build on SARIF/code-scanning upload, which is unavailable on private repos without paid GitHub Code Security. See [implementation_plan.md](implementation_plan.md#cicd-gate--real-continuous-monitoring--build-this-right-after-baas-security-and-after-part-0).
+
+### 13. Verify/clarify claimed-but-unconfirmed features
+- **Status:** Not Started
+- **Priority:** Low
+- **What:** Confirm certificates, Copilot/security Q&A, interactive sandbox preview, and scan-worker behavior before marketing them.
+
+### 14. Clarify promo video discrepancy
+- **Status:** Not Started
+- **Priority:** Low
+- **What:** Promo video references "Vanta Audit" / "thebeautytie.com"; clarify or replace the asset.
+
+---
+
+## Phase 3 — Expansion
+
+### 15. Enterprise security workflows
+- **Status:** Not Started
+- **Priority:** Strategic
+- **What:** Add richer rule packs, custom policies, team workflows, remediation SLAs, evidence exports, and historical risk reporting. Rule packs (BaaS, secrets, SCA, provenance) and the declarative rule schema are specified in [implementation_plan.md](implementation_plan.md).
+
+### 16. Controlled fix-review workflow
+- **Status:** Not Started
+- **Priority:** Strategic
+- **What:** Add preview, approval, branch naming, PR update/retry, and rollback controls around AI-generated fixes.
+
+## Validation Method
+
+For every completed fix, validate anonymous, logged-in, over-limit, billing, webhook-replay, and GitHub integration cases. Then update [checklist.md](checklist.md) with evidence before moving the item to launch-ready.

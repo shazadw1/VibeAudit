@@ -16,6 +16,22 @@ Next.js 14 · TypeScript · Tailwind + shadcn/ui · Supabase (Postgres + RLS + A
 ## Pricing
 Free ($0, 1 scan/mo) · Pro ($29/mo, unlimited + fix PR + monitoring) · Agency ($99/mo, 15 repos + white-label + badge)
 
+## Documentation
+
+This repo carries a full post-acquisition audit trail alongside the app code:
+
+| Doc | What it is |
+|---|---|
+| [FINDINGS.md](FINDINGS.md) | Due-diligence audit — claim-by-claim verdict against the original sale listing |
+| [Roadmap.md](Roadmap.md) | Gaps disclosed post-sale: what's claimed vs. actually built, with exact code references |
+| [original_description.md](original_description.md) | The original Flippa listing text being audited against |
+| [docs/plan.md](docs/plan.md) | Phased fix & completion plan (Phase 0 blockers → Phase 3 expansion), with status tracking |
+| [docs/checklist.md](docs/checklist.md) | Launch readiness checklist |
+| [docs/competitor_research.md](docs/competitor_research.md) | Competitive landscape — who else scans AI-generated code, feature/pricing comparison, good-standing checks |
+| [docs/implementation_plan.md](docs/implementation_plan.md) | Technical plan for closing feature gaps, including a redesigned, standards-based rule engine |
+
+New to the project, read in this order: FINDINGS → Roadmap → plan → checklist for what's actually true and what's left, then competitor_research → implementation_plan for what to build next and why.
+
 ## Quick start
 
 ```bash
