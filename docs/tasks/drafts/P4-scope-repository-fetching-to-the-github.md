@@ -12,30 +12,32 @@ runner_eligible: false
 ---
 
 ## Problem
-`lib/github/fetch-repo.ts`'s `fetchRepoFiles` authenticates every fetch with a single
-operator token read from `process.env.GITHUB_TOKEN || process.env.GITHUB_PAT` (see
-`lib/github/fetch-repo.ts:25`), not the requesting user's GitHub App installation. Both
-call sites accept an arbitrary `owner/repo` string from the client:
-`app/api/scan/start/route.ts` (authenticated) and the unauthenticated
-`app/svc/scan/route.ts`. Neither route checks that the target repo belongs to the caller's
-installation before fetching it — `app/api/scan/start/route.ts` does look up a `repos` row
-by `owner_id`/`full_name` (see `app/api/scan/start/route.ts:83`, the `.from("repos")`
-ownership lookup; not indexed by codegraph as its own node — see "Additional context"
-below), but that lookup only gates whether the repo has ever been *synced* to some
-installation, not whether the operator token used to fetch it is scoped to that
-installation — and the row is written with `installation_id: 0`
-(`app/api/scan/start/route.ts:90`), so the stored data never records which installation
-actually authorized the fetch either way. In short: today, any logged-in user can trigger a
-scan of any repository the shared operator token can read, whether or not that repo is
-connected to their own GitHub App installation — this is the Launch check plan item 4
-exists to close. Per
-[docs/implementation_plan.md §0.1](implementation_plan.md#01-scope-repository-fetching-to-the-github-app-installation-security--do-this-before-anything-else),
-this stops being merely an authorization gap and becomes a genuine cross-tenant one the
-moment a push webhook (which carries a real `installation.id`) is wired to the same fetch
-function. `docs/checklist.md` under "Security Baseline" already records this as a
-**confirmed gap** (2026-09-17 review): "repository access is NOT limited to the user's
-installation... Fix per implementation_plan.md §0.1," plus a related confirmed partial gap
-for `app/svc/scan`'s shared-token exposure.
+`fetchRepoFiles` (`lib/github/fetch-repo.ts:68-111`) authenticates every GitHub call with
+one operator token read from `process.env.GITHUB_TOKEN || process.env.GITHUB_PAT`
+(`lib/github/fetch-repo.ts:25`), never with the requesting user's GitHub App installation.
+Both callers pass an arbitrary client-supplied `owner/repo` string straight through:
+
+- `app/api/scan/start/route.ts` (authenticated, `POST` at line 23) parses the body, calls
+  `fetchRepoFiles` at line 67 with **no ownership check of any kind** before the fetch, and
+  only afterwards upserts a `repos` row for the requesting user with `installation_id: 0`
+  (line 90). Because `public.repos.installation_id` is `bigint not null`
+  (`supabase/schema.sql:26`), `0` is the sentinel that makes the insert succeed, so the
+  stored data can never say which installation authorised the fetch.
+- `app/svc/scan/route.ts` (unauthenticated, `POST` at line 18) shares the same function and
+  therefore the same token. Its own doc comment (lines 9-12) claims it "only reads public
+  repos", which is false whenever the operator token can read a private repo.
+
+Net effect, as `docs/plan.md` item 4 puts it: any logged-in user can scan any repo the
+operator token can read, and anonymous callers can do the same through the public route.
+[implementation_plan.md §0.1](implementation_plan.md#01-scope-repository-fetching-to-the-github-app-installation-security--do-this-before-anything-else)
+calls this an authorization gap today that becomes a cross-tenant gap the moment the push
+webhook (which carries a real `installation.id`) is wired to the same fetch function.
+`docs/checklist.md` "Security Baseline" records it twice: line 39 (**confirmed gap**,
+2026-09-17 review: access not limited to the user's installation, `installation_id: 0`
+stored) and line 40 (**confirmed partial gap**: `app/svc/scan` shares the token). The
+installation-scoped client this fix needs already exists as `getInstallationOctokit`
+(`lib/github/app.ts:24-35`); per implementation_plan.md "Current state" bullet "GitHub App",
+nothing in the scan path uses it today.
 
 ## Codegraph Context
 index: 2026-09-19T22:58:38Z (1789858718989), files: 89, stale: no
@@ -444,101 +446,172 @@ explicitly listed here as not present in the index.
 
 ### Additional context (assistant-added; not queryable — confirmed absent above, not just unchecked)
 
-- The `repos` ownership lookup: `.from("repos")` at `app/api/scan/start/route.ts:83`, and
-  the `installation_id: 0` literal it writes at `app/api/scan/start/route.ts:90` — both are
-  string/object-literal arguments to a Supabase client call, not indexed as their own
-  codegraph nodes or edges (confirmed via `related app/api/scan/start/route.ts` above,
-  which lists only real symbol edges).
-- The shared operator token: `process.env.GITHUB_TOKEN || process.env.GITHUB_PAT`
-  (`lib/github/fetch-repo.ts:25`), also referenced in the rate-limit error message at
-  `lib/github/fetch-repo.ts:33` and the doc comment at `lib/github/fetch-repo.ts:66`. A
-  plain env-var read, not a symbol.
-- `app/svc/scan/route.ts` has no `repos` lookup at all and shares the same operator token,
-  so it can fetch any private repo that token can read (already named above via its own
-  term heading; called out again here as the specific gap, per `docs/checklist.md`'s
-  confirmed partial gap).
+- `app/api/scan/start/route.ts` — the `.from("repos")` call at lines 82-95 is an **upsert
+  after the fetch**, not a lookup before it; there is no ownership check anywhere in the
+  handler. `installation_id: 0` is the object-literal argument at line 90. Neither is a
+  codegraph node (confirmed via `related app/api/scan/start/route.ts` above).
+- `lib/github/app.ts` — `getGitHubApp()` (`lib/github/app.ts:5-22`) returns `null` when the
+  App env is missing or a placeholder; `getInstallationOctokit(installationId)`
+  (`lib/github/app.ts:24-35`) returns `null` on failure; `syncInstallationRepos`
+  (`lib/github/app.ts:37-103`) is the only writer of a real `installation_id` into `repos`
+  today, and its non-production demo fallback writes `installationId || 999999`
+  (`lib/github/app.ts:52-58`).
+- `supabase/schema.sql:20-29` — `public.repos` has `installation_id bigint not null` and
+  `unique(user_id, github_repo_id)`; RLS in
+  `supabase/migrations/20260705000000_initial_schema.sql:117-120` scopes rows by `user_id`.
+  No schema change is needed.
+- `components/scan/real-scan-client.tsx:62` — the only caller of `/svc/scan`. Its UI copy at
+  line 138 tells users private repos "need a GITHUB_TOKEN set on the server"; that is
+  feature-availability wording and must change in step with the route (high-risk per
+  `CLAUDE.md` Lanes).
+- The operator token is a plain env read (`lib/github/fetch-repo.ts:25`), also in the 403
+  error text at line 33 and the doc comment at line 66.
+- `app/(dashboard)/onboarding/page.tsx` and `components/dashboard/analytics-client.tsx` in
+  "Files in scope" are false positives from the `repos` search term (UI fixture constants);
+  not touched by this item.
+- Tests: `vitest.config.ts` includes only `**/__tests__/**/*.test.ts`; the sole existing test
+  is `lib/scan/__tests__/engine.test.ts`. New tests belong in `lib/github/__tests__/` and
+  `app/api/scan/start/__tests__/`.
 
 ## In Scope
-- Resolving the target repo to a `repos` row owned by the requesting user and refusing
-  otherwise, in the authenticated route only — per
-  [implementation_plan.md §0.1](implementation_plan.md#01-scope-repository-fetching-to-the-github-app-installation-security--do-this-before-anything-else)
-  ("Resolve the target repo to a `repos` row owned by the requesting user; refuse
-  otherwise (authenticated route)").
-- Fetching through `getInstallationOctokit(repo.installation_id)`
-  (`lib/github/app.ts:24-35`) and the GitHub Contents/Git APIs instead of the shared
-  `GITHUB_TOKEN`/`GITHUB_PAT` operator token, per the same §0.1 fix list.
-- Restricting `app/svc/scan/route.ts` to unauthenticated, token-free access to genuinely
-  public repos only (unauthenticated GitHub calls can only reach public content by
-  construction) — or removing the route — per §0.1 ("Keep the public route restricted to
-  genuinely public repos with **no** token at all... or remove it").
-- Never persisting `installation_id: 0` (`app/api/scan/start/route.ts:90`); store the real
-  installation id resolved from the owning `repos` row.
-- Closing `docs/checklist.md` "Security Baseline" line 39's confirmed gap and line 40's
-  confirmed partial gap for these two routes.
+Per
+[implementation_plan.md §0.1](implementation_plan.md#01-scope-repository-fetching-to-the-github-app-installation-security--do-this-before-anything-else)
+"Fix" list, and `docs/checklist.md` "Security Baseline" lines 39-40:
+- Authenticated route: resolve the target repo to a `repos` row where `user_id` is the
+  requesting user **before** fetching; refuse (404) if none exists. The row is the source
+  of `installation_id`.
+- Fetch through `getInstallationOctokit(repo.installation_id)` (`lib/github/app.ts:24-35`)
+  using the GitHub API (Git Trees + Git blobs / Contents) for metadata, tree, and blob
+  reads. `fetchRepoFiles` stops reading `GITHUB_TOKEN`/`GITHUB_PAT` itself.
+- Never store `installation_id: 0`; the upsert at `app/api/scan/start/route.ts:82-95`
+  either goes away (row already exists) or writes the resolved row's real id.
+- Public route `app/svc/scan/route.ts`: keep it, public-only and token-free. Every GitHub
+  call it makes is unauthenticated, so it can only reach public content by construction
+  (§0.1's first option; decided, see Approval Notes). Fix its doc comment and the UI copy
+  in `components/scan/real-scan-client.tsx:138` to match.
+- No global-token fallback anywhere. If the GitHub App credentials are missing or
+  `getInstallationOctokit` returns `null` for the resolved installation, the authenticated
+  route returns 503 (decided, see Approval Notes).
+- Tests under `lib/github/__tests__/` and `app/api/scan/start/__tests__/` for the
+  behaviours in Acceptance Criteria.
 
 ## Out of Scope
-- The `parseRepoInput` `?`/`#`/`..` encoding hardening that §0.1 lists as "Minor" (separate,
-  lower-severity cleanup; host is fixed so impact is low today), and the `encodeURIComponent`
-  call it recommends (confirmed not a symbol this repo defines yet — see "Follow-up
-  queries" above).
-- Anything in [implementation_plan.md §0.2](implementation_plan.md#02-suppression-baseline-and-confidence-gating-prerequisite-for-any-ci-gate)
-  (suppression/baseline/confidence gating), §0.3 (scoring model), or §0.4 (fix-engine
-  security design) — separate prerequisites, not this item.
-- `docs/checklist.md` "Security Baseline" lines 59–60 (installation callback/deletion
-  ownership) and lines 199–209 (installation repo sync / webhook handling) — those cover
-  the installation lifecycle, not the scan-fetch path this item scopes. The push webhook's
-  `installation.id` wiring implementation_plan.md §0.1 warns about is separate work too
-  (confirmed no webhook-payload file is in this item's codegraph scope — see "Follow-up
-  queries" above).
+- The §0.1 "Minor" `parseRepoInput` hardening (`encodeURIComponent` on owner/repo, blocking
+  `?`, `#`, `..`); low impact because the host is fixed, and `encodeURIComponent` is
+  confirmed not a symbol this repo defines yet (see "Follow-up queries" above). Separate
+  micro-sized follow-up.
+- Everything in implementation_plan.md §0.2 (suppression/baseline/confidence), §0.3
+  (scoring), §0.4 (fix-engine security).
+- Wiring the push webhook (`app/api/github/webhook/route.ts`) to the fetch path; that is
+  the "CI/CD gate + real continuous monitoring" work in implementation_plan.md and
+  `docs/checklist.md` line 371 (confirmed no webhook-payload file is in this item's
+  codegraph scope, see "Follow-up queries" above). This item only makes the fetch function
+  safe for it.
+- `docs/checklist.md` "Authentication And Authorization" lines 59-61 (installation callback
+  and deletion ownership) and "GitHub Integration" lines 199-209 (sync, dedupe, retry,
+  reconnect UI): installation lifecycle, not the scan-fetch path.
+- Using `raw.githubusercontent.com` with the installation token as a bearer to save API
+  rate limit. Decided out for this task; blobs are read through the GitHub API only. A
+  later item may revisit if installation rate limits bite in practice.
+- Any `supabase/` schema or RLS change; the existing `repos` shape already carries what is
+  needed.
+- The `syncInstallationRepos` demo fallback (`lib/github/app.ts:41-70`) and its `999999`
+  sentinel; noted in Approval Notes only.
 
 ## Implementation Tasks
-- [ ] In `app/api/scan/start/route.ts`, require the resolved `repos` row (the existing
-      `.from("repos")` lookup at `app/api/scan/start/route.ts:83`) to belong to the
-      requesting user's installation before proceeding; return 403/404 otherwise.
-- [ ] In `lib/github/fetch-repo.ts`, change `fetchRepoFiles` (currently
-      `lib/github/fetch-repo.ts:68-111`) to accept an installation-scoped Octokit (or an
-      installation id it can pass to `getInstallationOctokit`,
-      `lib/github/app.ts:24-35`) instead of reading `GITHUB_TOKEN`/`GITHUB_PAT`
-      (`lib/github/fetch-repo.ts:25`) itself, and fetch via the Contents/Git APIs.
-- [ ] Update `app/api/scan/start/route.ts:90` to persist the real
-      `installation_id` from the owning `repos` row, never `0`.
-- [ ] Restrict `app/svc/scan/route.ts` to a token-free client for genuinely public repos
-      only, or remove the route, per §0.1; update its doc comment
-      (`app/svc/scan/route.ts:11`) to match whatever is shipped.
-- [ ] Add a fixture/unit test for `fetchRepoFiles`'s new installation-scoped signature (no
-      existing test references it — see "Likely tests" above) and a route-level test that
-      a user cannot trigger a scan of a repo their installation does not own.
+- [ ] `lib/github/fetch-repo.ts`: change `fetchRepoFiles` to take an explicit client
+      instead of reading env: `fetchRepoFiles(fullName, branch, client)` where `client`
+      is either an installation Octokit from `getInstallationOctokit` or an explicit
+      `{ anonymous: true }` marker. Route metadata, tree, and blob reads through the
+      GitHub API (Git Trees + Git blobs / Contents) on both paths; do not read blobs from
+      `raw.githubusercontent.com`. Delete `ghHeaders`'s `GITHUB_TOKEN`/`GITHUB_PAT` read
+      (line 25) with no replacement fallback, and update the 403 message (line 33) and
+      doc comment (line 66). Keep `CODE_EXT`, `SKIP_PATH`, `MAX_FILES`,
+      `MAX_FILE_BYTES`, `CONCURRENCY`, `pool`, and the `FetchedRepo` shape unchanged.
+- [ ] `app/api/scan/start/route.ts`: before line 65, select the `repos` row by
+      `user_id = user.id` and `full_name = parsedRepo.fullName` (RLS also enforces
+      `user_id`); return 404 `{ error: "Repository is not connected to your GitHub App
+      installation" }` if absent (404, not 403: decided). Call
+      `getInstallationOctokit(row.installation_id)`; return 503
+      `{ error: "GitHub App is not configured or the installation is unavailable" }` if it
+      is `null`. Never fall back to an env token. Pass the client to `fetchRepoFiles`.
+- [ ] `app/api/scan/start/route.ts:78-95`: drop the `installation_id: 0` upsert. Use the
+      resolved row's `id` for the `scans` insert; at most update `default_branch` on it.
+- [ ] `app/svc/scan/route.ts`: call `fetchRepoFiles` with the anonymous client; rewrite the
+      doc comment (lines 9-12) to state that only public repos are reachable and no token
+      is ever used.
+- [ ] `components/scan/real-scan-client.tsx:138`: replace the "need a GITHUB_TOKEN" copy
+      with wording that private repos require connecting the GitHub App and scanning from
+      the dashboard.
+- [ ] `lib/github/__tests__/fetch-repo.test.ts`: with a stubbed client, assert (a) no
+      `Authorization` header and no `process.env.GITHUB_TOKEN`/`GITHUB_PAT` read on the
+      anonymous path, (b) the installation client is used for metadata, tree, and blob
+      reads, (c) existing filtering/truncation behaviour is preserved.
+- [ ] `app/api/scan/start/__tests__/route.test.ts`: mock `@/lib/supabase/server` and
+      `@/lib/github/app`; assert a repo not in the user's `repos` rows returns 404 before
+      any fetch, a `null` installation client returns 503 before any fetch, an owned repo
+      fetches via `getInstallationOctokit(row.installation_id)`, and no write ever carries
+      `installation_id: 0`.
+- [ ] `docs/checklist.md`: on acceptance, controller ticks lines 39 and 40 (handled at
+      close-out per `CLAUDE.md` §2.6, not by the implementer).
 
 ## Acceptance Criteria
-- A logged-in user who is not connected to installation X cannot cause
-  `app/api/scan/start/route.ts` to scan a repo that only installation X owns — the request
-  is refused (403/404), and this is exercised by a route-level test.
-- `app/svc/scan/route.ts` either performs no authenticated/token-bearing fetch at all, or is
-  removed; either way it can no longer read a private repo via the shared operator token.
-- No code path writes `installation_id: 0` for a newly scanned repo.
-- `fetchRepoFiles` no longer reads `process.env.GITHUB_TOKEN`/`GITHUB_PAT` directly; it is
-  called with an installation-scoped Octokit/installation id sourced from
-  `lib/github/app.ts`'s `getInstallationOctokit`.
-- Launch check (docs/plan.md item 4): "User A cannot trigger a scan of a repo not connected
-  to their own installation, via either route."
+- Launch check (docs/plan.md item 4): user A cannot trigger a scan of a repo not connected
+  to their own installation, via either route. Covered by the route test (authenticated)
+  and by construction for the public route (no credentials).
+- `POST /api/scan/start` with a `repo` that has no `repos` row for the caller returns 404
+  and performs zero GitHub requests.
+- `POST /api/scan/start` for an owned repo returns 503 and performs zero GitHub requests
+  when `getInstallationOctokit` returns `null` (App credentials missing or installation
+  unavailable). Covered by the route test.
+- `POST /api/scan/start` with an owned repo fetches through
+  `getInstallationOctokit(<that row's installation_id>)` and never through an env token.
+- No code path writes `installation_id: 0`; `grep -rn "installation_id: 0"` over `app/`
+  and `lib/` returns nothing.
+- `lib/github/fetch-repo.ts` contains no reference to `GITHUB_TOKEN`, `GITHUB_PAT`, or
+  `raw.githubusercontent.com`; no code under `app/` or `lib/` reads either env var.
+- `POST /svc/scan` sends no `Authorization` header on any request; a private repo returns
+  the existing "not found (is it public?)" 502 path.
+- The `files` upload path of `/api/scan/start` (lines 40-50) is unchanged.
+- `npx tsc --noEmit`, `npx next lint`, and `npx vitest run` all pass, including
+  `lib/scan/__tests__/engine.test.ts`.
 
 ## Verification
-- `npx vitest run lib/github` (new fixture(s) for `fetchRepoFiles`'s installation-scoped
-  path) and any new route-level test under `app/api/scan/__tests__/` or similar.
-- Manual check: with two seeded installations/users, confirm user A's session cannot scan a
-  repo owned only by installation B via `app/api/scan/start` or `app/svc/scan`.
-- Manual check: inspect a freshly scanned repo's stored row and confirm `installation_id`
-  is the real installation id, never `0`.
-- `scripts/factory/verify.sh --full` (this is a high-risk-lane item touching `app/api/`,
-  `lib/github/`; the reviewer reproduces in a scratch repo per `.claude/agents/reviewer.md`
-  and reruns `verify.sh` itself rather than trusting the stamp).
+- `npx vitest run lib/github app/api/scan/start` during work (targeted).
+- **Required live check (two installations).** Two users, one real GitHub App
+  installation each. Confirm user A's session gets 404 from `/api/scan/start` for user
+  B's repo, that a successful scan by user A writes a `scans` row whose `repo_id` points
+  at a row with A's real `installation_id`, and that unsetting the App credentials makes
+  the same request return 503. Unit and route tests do not substitute for this. If the
+  environment is not available at close-out, the item closes as `Needs Verification`,
+  not `Done`.
+- Manual: `POST /svc/scan` with a known-private repo returns 502 "not found", even with
+  `GITHUB_TOKEN` still set in the environment.
+- `scripts/factory/verify.sh --full` once before ship. High-risk lane: the reviewer
+  reproduces the bypass on the pre-fix tree (a scratch copy, stubbed `fetch`) and reruns
+  `verify.sh` itself rather than trusting the stamp, per `.claude/agents/reviewer.md`.
+- Never call live GitHub with real credentials during verification (`CLAUDE.md` §4).
 
 ## Approval Notes
-Open questions (assistant-added, not answered here — for the human/controller reviewing
-this draft before it moves out of `pending`/`draft` status):
-- Should `app/svc/scan/route.ts` be restricted to public-repo-only fetches, or removed
-  outright? §0.1 offers both options; this affects whether any client relying on the
-  unauthenticated route needs a migration note.
-- Does removing the global `GITHUB_TOKEN`/`GITHUB_PAT` fallback break any existing
-  deployment that has no GitHub App installations configured yet (e.g. local dev)? Worth
-  confirming before removing the fallback outright.
+Decisions recorded 2026-09-19 by the user (controller session). These are binding for the
+implementer and reviewer; a deviation is a decision outside the brief and must stop for
+the user.
+
+1. **Public route.** Keep `app/svc/scan/route.ts`. It becomes public-only and token-free:
+   no `Authorization` header on any GitHub call it makes. Not removed.
+2. **Fetch mechanism.** Authenticated scans use the installation Octokit from
+   `getInstallationOctokit` and the GitHub API for metadata, tree, and blob reads. The
+   `raw.githubusercontent.com` bearer optimisation is explicitly out of this task.
+3. **No global-token fallback.** `GITHUB_TOKEN`/`GITHUB_PAT` are no longer read anywhere
+   in the fetch path. Missing GitHub App credentials, or a `null` client for the resolved
+   installation, returns 503 from the authenticated route. Non-production environments
+   without App credentials therefore cannot run authenticated scans; that is accepted.
+4. **Unowned repo.** `/api/scan/start` returns 404 when the caller has no `repos` row for
+   the requested repo. Not 403.
+5. **Live verification is required.** The two-installation manual check in Verification
+   is a completion requirement. If it cannot be run, the item closes as
+   `Needs Verification`.
+
+Lane is `high-risk` as given: paths under `lib/github/` and `app/api/` match the `CLAUDE.md`
+high-risk list, and `components/scan/real-scan-client.tsx:138` is feature-availability copy.
+No lane conflict. No remaining open questions.
