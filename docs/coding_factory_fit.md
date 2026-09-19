@@ -70,3 +70,7 @@ Non-risky ambiguity is ruled on and recorded in the implementer report. Risky am
 ## First task for the factory
 
 Item 1 in `docs/plan.md` (remove the fabricated testimonial) is small, low-risk, and touches marketing copy, so it exercises the full loop including the user-approval gate. Item 4 (scope repo fetching to the installation) is the first item that needs the reviewer's security focus.
+
+## Learnings log
+
+- **Run 1 (item 1, 2026-09-19):** loop worked end to end: brief → Sonnet implementer → review package → Opus reviewer PASS → verify green → ledger. Caveat: `.claude/agents/*.md` and `.claude/settings.json` hooks are only loaded at session start, so in the session that creates them the Controller must dispatch a general-purpose agent with the role rules inlined and the chosen model. From the next session on, `subagent_type: implementer|reviewer` works directly and the commit gate is live.

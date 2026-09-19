@@ -1281,19 +1281,13 @@ export function LandingClient() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           {[
             {
               quote: "We built our entire fintech dashboard in 3 weeks using Cursor. VibeAudit caught a Stripe webhook signature bypass 2 hours before our Product Hunt launch. Saved our company.",
               author: "Marcus Vance",
               role: "Co-Founder & CTO @ PayScale AI",
               score: "98/100 VibeScore",
-            },
-            {
-              quote: "The autonomous PR generator is pure magic. Instead of just giving us a confusing PDF security report, VibeAudit opened 4 clean GitHub pull requests that fixed our SQL queries instantly.",
-              author: "Elena Rostova",
-              role: "Lead Engineer @ DataFlow Systems",
-              score: "95/100 VibeScore",
             },
             {
               quote: "As an agency building Lovable and v0 prototypes for enterprise clients, VibeAudit is our secret weapon. We attach their A+ Security Audit badge to every client deliverable.",

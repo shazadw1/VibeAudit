@@ -22,7 +22,7 @@ The main launch risk is product honesty: the headline "Autonomous PR Fix Engine"
 ## Phase 0 — Production Blockers
 
 ### 1. Fix the fabricated testimonial on the landing page
-- **Status:** Not Started
+- **Status:** Done (2026-09-19, factory run 1; other fictional testimonials and PR claims remain, see items 13/14)
 - **Priority:** Critical
 - **What:** `components/marketing/landing-client.tsx` includes a customer quote claiming the autonomous PR generator opened GitHub PRs. Remove/rewrite it while the backend returns `not_implemented`.
 
