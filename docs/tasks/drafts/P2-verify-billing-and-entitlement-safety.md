@@ -298,97 +298,124 @@ index: 2026-09-20T02:38:09Z (1789871889075), files: 100, stale: no
   `price_id`, or `latest_invoice` column anywhere (checklist line 156).
 
 ## In Scope
-Proposed; several items below depend on Approval Notes decisions and may move.
-- **Upgrade path**: branch `app/api/stripe/checkout/route.ts` on the caller's existing
-  subscription. No subscription -> checkout session as today. Active subscription ->
-  `stripe.subscriptions.update` as a subscription item update with proration, returning a
-  redirect back to billing rather than a checkout URL. Per `docs/checklist.md` lines
-  131-134 and 158.
-- **Self-upgrade lockdown**: a migration replacing the blanket `Users can update own
-  profile` policy (`supabase/migrations/20260705000000_initial_schema.sql:116`) with one
-  that cannot change `plan`, `stripe_customer_id`, `stripe_subscription_id`, or the P6
-  period columns; those stay writable only by the service role used in the webhook
-  (`lib/supabase/admin.ts`). Per `docs/checklist.md` lines 35 and 38.
-- **Webhook idempotency**: a `stripe_events` table keyed on Stripe's `event.id`, inserted
-  before handling and short-circuiting on conflict, so replays are acknowledged without
-  re-applying. Per `docs/checklist.md` line 152.
+Decided scope (Approval Notes decisions 1-6). Verify **and** fix, in one task.
+- **Plan records in the database.** New `public.plans` table holding the commercial
+  metadata that is hardcoded today: `id`, `name`, `description`, `price_monthly`,
+  `price_annual`, `stripe_price_id_monthly`, `stripe_price_id_annual`, `features jsonb`,
+  `display_order`, `active`. Seeded from `lib/stripe/plans.ts` plus the annual prices
+  (decision 2). It joins P6's `public.plan_limits` on plan id; `plan_limits` keeps the
+  numeric limits and is not duplicated here. `lib/stripe/plans.ts` keeps `PlanId`,
+  `LIMIT_KINDS`, `PlanLimits`, and the price-id resolvers, and its `PLANS` constant becomes
+  seed data only (`docs/checklist.md` line 73).
+- **Annual billing becomes real** (decision 2). The two annual Stripe prices are created by
+  a human in the Stripe dashboard, test mode first; this task only consumes their ids
+  through the seed. `priceIdForPlan` takes an interval; the checkout route accepts
+  `interval: "month" | "year"`.
+- **Billing page reads from data.** `app/(dashboard)/settings/billing/page.tsx` renders
+  plans from `plans` joined to `plan_limits` instead of its hardcoded array, so the
+  "5 scans/month" contradiction disappears by construction rather than by editing copy. The
+  free scan limit shown is whatever `plan_limits` holds (P6 seeded 1); changing it later is
+  an admin edit, not a code change (decision 2 follow-up).
+- **Upgrade path** (the launch check): branch `app/api/stripe/checkout/route.ts` on the
+  caller's existing subscription. None -> checkout session as today. Active or trialing ->
+  `stripe.subscriptions.update` with the existing item id, the new price, and
+  `proration_behavior: "create_prorations"`; return `{ updated: true }`. Refuse when the
+  target plan and interval match the current one. Per `docs/checklist.md` lines 131-134, 158.
+- **Self-upgrade lockdown** (decision 3): replace the blanket `Users can update own profile`
+  policy (`supabase/migrations/20260705000000_initial_schema.sql:116`) so a user may still
+  update `email` and `onboarding_completed` but never `plan`, `stripe_customer_id`,
+  `stripe_subscription_id`, `subscription_status`, `cancel_at_period_end`, or P6's
+  `current_period_start/end`. Those stay service-role only. Per `docs/checklist.md` lines
+  35 and 38.
+- **Webhook idempotency**: `public.stripe_events` keyed on Stripe's `event.id`, inserted
+  before handling, short-circuiting on conflict. Per `docs/checklist.md` line 152.
 - **Fail closed on unknown price**: `planIdFromPriceId` returns `null` for an unrecognised
-  id; the webhook logs and leaves the existing plan untouched instead of downgrading to
-  free. Per `docs/checklist.md` line 155.
-- **Failed payment and lifecycle states**: handle `invoice.payment_failed` and
-  `customer.subscription.paused`, and persist `subscription_status` and
-  `cancel_at_period_end` on `profiles`, so entitlement reflects `past_due`. Per
-  `docs/checklist.md` lines 156-157.
-- **Wire the billing UI** to the real routes, replacing the simulated `handleUpgrade`, and
-  correct the plan copy so it matches the seeded limits (Approval Notes decision 2 — product
-  copy is high-risk).
+  id; the webhook logs and leaves the existing plan untouched. Per `docs/checklist.md` line 155.
+- **Failed payment** (decision 5): persist `subscription_status` and `cancel_at_period_end`
+  on `profiles`; handle `invoice.payment_failed` and `customer.subscription.paused`.
+  Entitlement drops **at period end**, evaluated at read time by a new
+  `effectivePlan(profile)` in `lib/entitlements.ts`: a `past_due` or `unpaid` subscription
+  keeps its plan until `now > current_period_end`, then resolves to `free`. No scheduled job.
+  Every entitlement read goes through it, so P6's `checkLimit` inherits the rule.
 - **Tests** extending `app/api/stripe/webhook/__tests__/route.test.ts` plus new
-  `app/api/stripe/checkout/__tests__/`: duplicate delivery, unknown price, missing metadata,
-  checkout replay, upgrade of an existing subscriber, cancellation, failed payment. Per
+  `app/api/stripe/checkout/__tests__/` and `lib/__tests__/effective-plan.test.ts`. Per
   `docs/checklist.md` line 163.
-- Tick `docs/checklist.md` lines 12, 35, 38, 152, 155-158 at close-out (controller).
+- Tick `docs/checklist.md` lines 12, 35, 38, 73, 152, 155-158 at close-out (controller).
 
 ## Out of Scope
-- Moving plan records into the database and the admin UI that edits them (plan item 3;
-  checklist lines 73-74, 82). This item keeps reading `lib/stripe/plans.ts` and P6's
-  `plan_limits`.
-- Coupons and promotions (plan item 7; checklist lines 169-194), beyond leaving
-  `allow_promotion_codes: true` on the checkout session as it is today.
-- Usage metering, AI budgets, and top-up purchases (plan items 18 and 19; checklist lines
-  115-121, 159).
-- Annual billing. The billing page advertises it; no annual price id exists. Either the copy
-  goes or the prices do — Approval Notes decision 2. Building real annual plans is item 3.
+- The admin role model and the UI that edits `plans` and `plan_limits` (plan item 3;
+  checklist lines 62-63, 84-99). This task creates and seeds the rows and reads from them;
+  item 3 makes them editable, with audit trail and confirmation for high-risk edits. Same
+  split as P6 and decided the same way (decision 2 follow-up).
+- Creating the Stripe annual prices themselves. That is a human action in the Stripe
+  dashboard; `CLAUDE.md` §4 forbids this task from calling live Stripe. The task consumes
+  the ids.
+- Coupons and promotions (plan item 7), beyond leaving `allow_promotion_codes: true` as is.
+- Usage metering, AI budgets, top-ups (plan items 18-19; checklist lines 115-121, 159).
 - Operator-facing billing reporting (plan item 8).
-- Anything P6 owns: `plan_limits`, `usage_events`, `checkLimit`, the monitoring route, and
-  the period columns themselves. This item assumes they exist.
+- Anything P6 owns: `plan_limits`, `usage_events`, `checkLimit`, `recordUsage`, the
+  monitoring route, the period columns. Landed in `414fe3b`; this task builds on them.
 - Re-verifying the webhook signature check; already confirmed working (checklist line 32).
+- Proration policy beyond Stripe's `create_prorations` default, and whether downgrades apply
+  immediately or at period end for *plan changes* (distinct from decision 5, which is about
+  failed payments). Checklist line 135; leave as Stripe default and record it.
 
 ## Implementation Tasks
-- [ ] Confirm P6 has landed on `dev` first; this item edits the same files
-      (`lib/stripe/plans.ts`, `app/api/stripe/webhook/route.ts`).
-- [ ] `supabase/migrations/<ts>_billing_hardening.sql`: create `stripe_events`
-      (`event_id text primary key`, `type text`, `received_at timestamptz default now()`),
-      service-role write only, no client access; add `subscription_status text` and
-      `cancel_at_period_end boolean` to `profiles`; replace the profiles update policy with
-      a column-restricted one (revoke `update` on the billing columns from `authenticated`,
-      grant to `service_role`). Mirror into `supabase/schema.sql`; update `types/database.ts`.
-- [ ] `lib/stripe/plans.ts`: `planIdFromPriceId` returns `PlanId | null`; update both call
-      sites. Do not touch the P6 limit exports.
-- [ ] `app/api/stripe/webhook/route.ts`: insert into `stripe_events` before the switch and
-      return `{ received: true, duplicate: true }` on conflict; on unknown price id, log and
+- [ ] P6 has landed (`414fe3b`), so `plan_limits`, `usage_events`, the period columns, and
+      `lib/entitlements.ts` exist. Rebase on `dev` before starting.
+- [ ] `supabase/migrations/<ts>_billing_hardening.sql`:
+      create `plans` (columns above, `id text primary key` matching `plan_limits.plan`),
+      seeded with free/pro/agency from `lib/stripe/plans.ts` plus annual prices; RLS read
+      for authenticated, writes service-role only.
+      Create `stripe_events` (`event_id text primary key`, `type text`,
+      `received_at timestamptz default now()`), service-role only, no client access.
+      Add `subscription_status text` and `cancel_at_period_end boolean default false` to
+      `profiles`.
+      Replace the `profiles` update policy with a column-restricted one (revoke `update` on
+      the billing columns from `authenticated`, grant to `service_role`).
+      Mirror into `supabase/schema.sql`; update `types/database.ts`.
+- [ ] `lib/stripe/plans.ts`: `planIdFromPriceId` returns `PlanId | null`;
+      `priceIdForPlan(plan, interval)`; add annual env ids to the seed. Leave `LIMIT_KINDS`,
+      `PlanLimits`, and P6's exports untouched.
+- [ ] `lib/entitlements.ts`: add `effectivePlan(profile)` implementing the period-end rule,
+      and route `getPlanLimits`/`checkLimit` through it so a lapsed subscriber is limited as
+      free. Do not change P6's existing signatures otherwise.
+- [ ] `app/api/stripe/webhook/route.ts`: insert into `stripe_events` before the switch,
+      return `{ received: true, duplicate: true }` on conflict; on unknown price id log and
       skip the plan write; add `invoice.payment_failed` and `customer.subscription.paused`
-      cases writing `subscription_status`; persist `cancel_at_period_end` on subscription
-      updates.
-- [ ] `app/api/stripe/checkout/route.ts`: look up `stripe_subscription_id`; if present and
-      the subscription is active or trialing, call `stripe.subscriptions.update` with the
-      existing item id, the new price, and `proration_behavior: "create_prorations"`, then
-      return `{ updated: true }`. Refuse when the target plan equals the current plan.
-- [ ] `app/(dashboard)/settings/billing/page.tsx`: replace the simulated `handleUpgrade`
-      with a `POST` to `/api/stripe/checkout`, follow `url` when present and refresh on
-      `updated`; add a "Manage billing" action posting to `/api/stripe/portal`; read the
-      current plan from the user's profile rather than defaulting to `"pro"`; correct the
-      plan copy per Approval Notes decision 2.
-- [ ] Tests: extend `app/api/stripe/webhook/__tests__/route.test.ts` (duplicate `event.id`
-      applies once; unknown price leaves plan unchanged; `invoice.payment_failed` sets
-      status); new `app/api/stripe/checkout/__tests__/route.test.ts` (no subscription ->
-      session created; active subscription -> `subscriptions.update` called and
-      `sessions.create` **not** called; same-plan -> 400). Stripe SDK mocked throughout.
-- [ ] Exercise the new RLS policy against a scratch database as a non-service role.
+      writing `subscription_status`; persist `cancel_at_period_end`.
+- [ ] `app/api/stripe/checkout/route.ts`: accept `{ plan, interval }`; look up
+      `stripe_subscription_id`; if active or trialing call `stripe.subscriptions.update`
+      instead of creating a session; 400 when the target matches the current plan and
+      interval; resolve the price id from `plans`, not env directly.
+- [ ] `app/(dashboard)/settings/billing/page.tsx`: render from `plans` + `plan_limits`;
+      replace the simulated `handleUpgrade` with a `POST` to `/api/stripe/checkout`,
+      following `url` when present and refreshing on `updated`; add a "Manage billing"
+      action posting to `/api/stripe/portal`; show the real current plan from the profile
+      rather than defaulting to `"pro"`; keep the monthly/annual toggle, now backed by real
+      prices.
+- [ ] Tests: webhook (duplicate `event.id` applies once; unknown price leaves plan
+      unchanged; `invoice.payment_failed` sets status); checkout (no subscription -> session
+      created; active subscription -> `subscriptions.update` called and `sessions.create`
+      **not** called; same plan+interval -> 400); `effectivePlan` (past_due before period
+      end keeps plan, after period end resolves free). Stripe SDK mocked throughout.
+- [ ] Exercise the new profiles policy against a scratch database as a non-service role.
 
 ## Acceptance Criteria
 - Launch check (docs/plan.md item 2): a Pro subscriber upgrading to Agency ends with exactly
   one active Stripe subscription; the checkout route calls `subscriptions.update` and never
   `checkout.sessions.create` for that caller.
-- An authenticated user cannot change their own `plan`, `stripe_customer_id`, or
-  `stripe_subscription_id` through the Supabase client; the attempt is rejected by policy,
-  not merely by the absence of UI.
+- An authenticated user cannot change their own `plan`, `stripe_customer_id`,
+  `stripe_subscription_id`, `subscription_status`, or period columns through the Supabase
+  client; the attempt is refused by policy. Updating `onboarding_completed` still works.
 - Replaying a captured `checkout.session.completed` with the same `event.id` applies the
   profile update exactly once; the second delivery is acknowledged as a duplicate.
-- An unrecognised price id leaves the user's existing plan unchanged and logs; no silent
-  downgrade to free.
-- `invoice.payment_failed` records a `past_due` subscription status on the profile.
-- The billing page calls the real checkout and portal routes; no code path simulates an
-  upgrade with a timer; the plan copy matches the seeded limit values.
+- An unrecognised price id leaves the existing plan unchanged and logs; no silent downgrade.
+- A `past_due` subscriber keeps paid limits until `current_period_end` passes, then
+  `checkLimit` treats them as free. Verified through `effectivePlan`, not a cron.
+- The billing page renders plan names, prices, features, and limits from the database; no
+  hardcoded plan array remains; no code path simulates an upgrade with a timer.
+- Monthly and annual both produce a valid Stripe price id; neither is advertised without one.
 - No route accepts `plan`, `userId`, `stripe_customer_id`, or `stripe_subscription_id` from
   the request as authority (checklist line 38).
 - `npx tsc --noEmit`, `npx next lint`, `npx vitest run` pass; P6's tests still pass.
@@ -396,35 +423,41 @@ Proposed; several items below depend on Approval Notes decisions and may move.
 ## Verification
 - `npx vitest run app/api/stripe lib` during work.
 - Migration applied to a **scratch** Supabase project; then, as an authenticated non-service
-  role, attempt `update profiles set plan='agency'` and confirm it is refused.
+  role, attempt `update profiles set plan='agency'` and confirm it is refused, and
+  `update profiles set onboarding_completed=true` and confirm it succeeds.
 - **Required live check, Stripe test mode only** (mark `Needs Verification` if unavailable):
-  with test keys and `stripe listen`, run free -> Pro checkout, then Pro -> Agency upgrade,
-  and confirm in the Stripe dashboard that the customer has exactly one active subscription.
-  Trigger `invoice.payment_failed` and a duplicate delivery via `stripe trigger` / replay.
+  with test keys and `stripe listen`, run free -> Pro monthly checkout, then Pro -> Agency
+  annual upgrade, and confirm in the Stripe dashboard that the customer has exactly one
+  active subscription with a proration line. Replay a delivery and confirm the duplicate is
+  a no-op. `stripe trigger invoice.payment_failed` and confirm status plus the period-end
+  entitlement rule.
 - Never use live Stripe keys or real customer data (`CLAUDE.md` §4). Test-mode keys only,
-  never committed.
+  never committed. The annual prices must already exist in test mode before this runs.
 - Reviewer (high-risk lane, `.claude/agents/reviewer.md`): reproduce the duplicate-subscription
-  bug on the pre-fix tree with a mocked Stripe client; independently confirm the RLS policy
-  blocks the self-upgrade; rerun `scripts/factory/verify.sh --full`.
+  bug on the pre-fix tree with a mocked Stripe client; independently confirm the policy blocks
+  the self-upgrade; rerun `scripts/factory/verify.sh --full`.
 
 ## Approval Notes
-Open questions for the human/controller before this leaves `pending`/`draft`. Each changes
-the shape of the work:
-1. **Does "verify" include fixing?** The item is worded as verification, but several things
-   it names cannot be exercised today because the billing page never calls the routes. Draft
-   assumes verify **and** fix in one task. The alternative is a report-only task that spawns
-   follow-up items, which leaves the self-upgrade hole open meanwhile.
-2. **Billing page plan copy.** It advertises "5 AST Security Scans / Month" on free (real
-   limit 1), "Developer Free"/"Pro AI Shield" naming, and annual pricing with no Stripe price
-   id. This is product-claim copy, high-risk per `CLAUDE.md`. Options: correct the copy to
-   match the real limits and drop the annual toggle; keep annual and create the prices
-   (pulls item 3 forward); or split the copy fix into its own marketing item.
-3. **Scope of the RLS fix.** Restricting `profiles` column updates is the highest-value fix
-   here, but it touches `supabase/` and could break any path that legitimately updates a
-   profile as the user (onboarding sets `onboarding_completed`). Confirm it belongs in this
-   item rather than its own.
-4. **Ordering against P6.** P6 is mid-implementation and edits the same two files. Draft
-   assumes this item starts only after P6 lands. Confirm, or say it should fold into P6.
-5. **Failed-payment policy.** When a subscription goes `past_due`, does entitlement drop
-   immediately, at period end, or stay until Stripe cancels? Checklist line 157 asks for the
-   handling; the policy itself is a product decision.
+Decisions recorded 2026-09-20 by the user (controller session). Binding for implementer and
+reviewer; a deviation is a decision outside the brief and must stop for the user.
+
+1. **Verify and fix in one task.** The item is worded as verification, but the billing page
+   never calls the real routes, so the paths cannot be exercised without fixing them.
+2. **Annual billing becomes real**, not removed: the two annual Stripe prices are created by
+   a human in the dashboard and consumed here. Plan copy, prices, and limits are **data**,
+   not code, so the "5 scans/month" contradiction is resolved by rendering from
+   `plan_limits` rather than by editing a string.
+3. **Split: this task stores, item 3 edits.** This task creates and seeds `plans` and reads
+   from it; plan item 3 adds the admin role model and editing UI. Mirrors the P6 split.
+4. **Profile column lockdown lands here**, not as a separate item. It is the highest-value
+   fix in the task and makes P6's limits meaningful.
+5. **Ordered after P6**, which landed as `414fe3b` and closed as Needs Verification. This
+   task rebases on it and does not re-implement anything it owns.
+6. **Failed payment: drop at period end.** A `past_due` or `unpaid` subscriber keeps their
+   plan until `current_period_end`, then resolves to free. Evaluated at read time by
+   `effectivePlan`, so no scheduled job is required.
+
+Assumptions recorded, not decisions: proration uses Stripe's `create_prorations` default;
+plan-change downgrade timing (as opposed to failed-payment timing) stays Stripe's default and
+is left to plan item 3 or a follow-up; the annual prices must exist in Stripe test mode before
+the live check can run. No remaining open questions.
