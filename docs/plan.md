@@ -1,6 +1,6 @@
 # Phased Fix & Completion Plan — VibeAudit
 
-References: [../FINDINGS.md](../FINDINGS.md) · [../original_description.md](../original_description.md) · [../Roadmap.md](../Roadmap.md) · [checklist.md](checklist.md)
+References: [FINDINGS.md](FINDINGS.md) · [../original_description.md](../original_description.md) · [Roadmap.md](Roadmap.md) · [checklist.md](checklist.md)
 
 The main launch risk is product honesty: the headline "Autonomous PR Fix Engine" is demoed as working in the promo video but is explicitly simulated in code. The second launch risk is commercial readiness: billing, plan limits, coupons, and admin-editable commercial settings must be verified before paid traffic.
 
@@ -47,7 +47,7 @@ The main launch risk is product honesty: the headline "Autonomous PR Fix Engine"
 ### 5. Label or remove the fixture Copilot page's fabricated claims
 - **Status:** Done (2026-09-20, factory runner; see P5-label-or-remove-the-fixture-copilot-page.md)
 - **Priority:** Critical
-- **What:** `components/dashboard/copilot-client.tsx` (502 lines, fixture-only) returns canned replies claiming an "Autonomous PR #117" was opened and that analysis ran "in volatile AWS Nitro memory". Same honesty problem as the testimonial in item 1. Label the page demo or remove the fabricated content. Note: [Roadmap.md](../Roadmap.md) §4 says no Copilot feature was found; this page is it.
+- **What:** `components/dashboard/copilot-client.tsx` (502 lines, fixture-only) returns canned replies claiming an "Autonomous PR #117" was opened and that analysis ran "in volatile AWS Nitro memory". Same honesty problem as the testimonial in item 1. Label the page demo or remove the fabricated content. Note: [Roadmap.md](Roadmap.md) §4 says no Copilot feature was found; this page is it.
 
 ### 17. Harden `parseRepoInput` path handling
 - **Status:** Not Started

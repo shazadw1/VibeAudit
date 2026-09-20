@@ -1,6 +1,6 @@
 # Roadmap — Launch Phases From Listing Audit
 
-This documents functionality claimed in the individual Flippa listing ([original_description.md](original_description.md)) that the code audit ([FINDINGS.md](FINDINGS.md)) found to be incomplete or not built. The work is ordered by launch risk, not by feature attractiveness.
+This documents functionality claimed in the individual Flippa listing ([original_description.md](../original_description.md)) that the code audit ([FINDINGS.md](FINDINGS.md)) found to be incomplete or not built. The work is ordered by launch risk, not by feature attractiveness.
 
 ## Phase 0 — Production Blockers
 

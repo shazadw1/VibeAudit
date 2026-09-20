@@ -1,6 +1,6 @@
 # Original Flippa Listing — VibeAudit AI
 
-Preserved verbatim as received from the seller at time of purchase, for reference against [FINDINGS.md](FINDINGS.md) and [Roadmap.md](Roadmap.md).
+Preserved verbatim as received from the seller at time of purchase, for reference against [docs/FINDINGS.md](docs/FINDINGS.md) and [docs/Roadmap.md](docs/Roadmap.md).
 
 Source: https://flippa.com/13437644-vibeaudit-security-scanner-saas-for-ai-built-apps-connect-github-get-a-security-score-fix-report-in-60s-next-js-14-supabase-stripe
 
@@ -95,4 +95,4 @@ URL: https://www.youtube.com/watch?v=ajmaKxmCEmM
 >
 > (02:30) Build fast. Audit smarter. Try Vanta Audit at thebeautytie.com.
 
-**Note:** the transcript's closing line names the product "Vanta Audit" and points to `thebeautytie.com`, not `vibeauditai.com`. Flagged in [Roadmap.md](Roadmap.md) as a discrepancy worth raising with the seller — unclear if this is a transcription artifact or a reused/templated promo asset.
+**Note:** the transcript's closing line names the product "Vanta Audit" and points to `thebeautytie.com`, not `vibeauditai.com`. Flagged in [docs/Roadmap.md](docs/Roadmap.md) as a discrepancy worth raising with the seller — unclear if this is a transcription artifact or a reused/templated promo asset.

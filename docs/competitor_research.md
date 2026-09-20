@@ -1,6 +1,6 @@
 # Competitor Research — AI-Code / "Vibe Coding" Security Scanners
 
-References: [../FINDINGS.md](../FINDINGS.md) · [../Roadmap.md](../Roadmap.md) · [plan.md](plan.md)
+References: [FINDINGS.md](FINDINGS.md) · [Roadmap.md](Roadmap.md) · [plan.md](plan.md)
 
 Researched 2026-09-17 via open web search. Goal: identify real, currently-operating SaaS products that compete with VibeAudit (a regex-based security scanner for AI-built/"vibe-coded" apps), confirm which are in good standing, catalog their features, and use the gap analysis to inform production-readiness priorities.
 
@@ -11,7 +11,7 @@ Researched 2026-09-17 via open web search. Goal: identify real, currently-operat
 The "vibe coding security scanner" niche is **not nascent — it is already crowded and well-capitalized**. Every major AppSec incumbent (Snyk, Semgrep, SonarQube, Checkmarx, Wiz, GitHub) has pivoted messaging toward "securing AI-generated code," and at least one well-funded pure-play (Backslash Security, $27M raised) explicitly brands itself "the vibe coding security company." VibeAudit is entering a space with real, funded, shipping competitors on both ends:
 
 1. Scrappy indie URL-scanners targeting the exact same Lovable/Bolt/Replit/Cursor audience.
-2. Enterprise AppSec platforms racing to add "AI code" detection and **real** auto-fix PR generation — the exact feature VibeAudit currently only simulates (`app/api/fix/generate/route.ts`, see [Roadmap.md](../Roadmap.md#1-autonomous-pr-fix-engine--claimed-working-confirmed-not-implemented)).
+2. Enterprise AppSec platforms racing to add "AI code" detection and **real** auto-fix PR generation — the exact feature VibeAudit currently only simulates (`app/api/fix/generate/route.ts`, see [Roadmap.md](Roadmap.md#1-autonomous-pr-fix-engine--claimed-working-confirmed-not-implemented)).
 3. **[Review]** Free, first-party substitutes the buyer already has: Supabase's own Security Advisor, Lovable's built-in security scan, and the coding agent that wrote the code (see [Table 3](#table-3--free-first-party-substitutes-added-in-review)). These are not vendors to beat; they are the "why would I pay for this" objection in every sales conversation.
 
 ---
@@ -88,7 +88,7 @@ The dozen-plus tiniest tools (SafeToShip, isitsecure.ai, Safe Vibe Codes, etc.) 
 - **Dedicated, high-volume secrets detection** — GitGuardian ships 420+ secret patterns plus historical git-log scanning and public-repo monitoring; VibeAudit's single CWE-798 regex rule is thin by comparison. Cheap, high-value expansion that stays inside VibeAudit's existing no-dataflow-needed model.
 - **Supabase/Firebase/BaaS-specific checks** — nearly every niche competitor (Vibe App Scanner, VibeEval, SafeToShip, SymbioticSec) has dedicated RLS-misconfiguration and Firebase-rules checks, because that's the single most common real vulnerability class across Lovable/Bolt/Replit apps (one study found ~98% of scanned Supabase-backed apps had issues). VibeAudit has no BaaS-config-specific rule category — **highest-ROI gap** given it fits the existing regex/pattern architecture.
 - **Dependency/SCA scanning** — Socket.dev, Snyk, Semgrep, GitHub Dependabot all check third-party package vulnerabilities and "slopsquatting"/hallucinated-package risk (a well-documented AI-code-specific failure mode: ~20% of AI-suggested packages don't exist). VibeAudit has no SCA component.
-- **Real compliance certification, not fixture pages** — Aikido and others hold actual SOC2 Type II / ISO27001 certifications; VibeAudit's compliance dashboard is hardcoded fixture data with no real backend and no actual certification. A legal/trust risk if ever shown to enterprise prospects, not just a feature gap (see [Roadmap.md](../Roadmap.md#2-four-dashboard-pages--claimed-as-live-product-surfaces-confirmed-fixture-only)).
+- **Real compliance certification, not fixture pages** — Aikido and others hold actual SOC2 Type II / ISO27001 certifications; VibeAudit's compliance dashboard is hardcoded fixture data with no real backend and no actual certification. A legal/trust risk if ever shown to enterprise prospects, not just a feature gap (see [Roadmap.md](Roadmap.md#2-four-dashboard-pages--claimed-as-live-product-surfaces-confirmed-fixture-only)).
 - **AI-code-provenance awareness** — SonarQube's "AI Code Assurance" (flag files as AI-authored, apply stricter rules to them) is low-effort, high-narrative-value, fits VibeAudit's existing deterministic-rules engine, and directly reinforces its "security for AI-built apps" positioning.
 - **Suppression / baseline / ignore workflow** — **[Review]** every tool above ships `nosemgrep`-style inline ignores, a `.gitleaksignore`-style file, or a baseline that only fails on *new* findings. VibeAudit has none. This is a prerequisite for the CI gate, not a nice-to-have: without it, a gate that fails builds on the current `missing-auth`/`no-rate-limiting` heuristics (which only recognise Supabase auth calls and four rate-limit identifiers) will be disabled by the customer within days.
 

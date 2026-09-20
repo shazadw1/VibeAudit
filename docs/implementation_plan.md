@@ -1,6 +1,6 @@
 # Technical Implementation Plan — Closing the Competitive Gap
 
-References: [../FINDINGS.md](../FINDINGS.md) · [../Roadmap.md](../Roadmap.md) · [plan.md](plan.md) · [competitor_research.md](competitor_research.md)
+References: [FINDINGS.md](FINDINGS.md) · [Roadmap.md](Roadmap.md) · [plan.md](plan.md) · [competitor_research.md](competitor_research.md)
 
 This translates the "easy win" gaps identified in [competitor_research.md](competitor_research.md) into concrete engineering work against the actual codebase. It assumes the Phase 0/1 items in [plan.md](plan.md) (fabricated testimonial, billing safety, admin controls) land first — this is what comes after, focused on detection capability rather than commercial/honesty fixes.
 

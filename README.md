@@ -22,8 +22,8 @@ This repo carries a full post-acquisition audit trail alongside the app code:
 
 | Doc | What it is |
 |---|---|
-| [FINDINGS.md](FINDINGS.md) | Due-diligence audit — claim-by-claim verdict against the original sale listing |
-| [Roadmap.md](Roadmap.md) | Gaps disclosed post-sale: what's claimed vs. actually built, with exact code references |
+| [docs/FINDINGS.md](docs/FINDINGS.md) | Due-diligence audit — claim-by-claim verdict against the original sale listing |
+| [docs/Roadmap.md](docs/Roadmap.md) | Gaps disclosed post-sale: what's claimed vs. actually built, with exact code references |
 | [original_description.md](original_description.md) | The original Flippa listing text being audited against |
 | [docs/plan.md](docs/plan.md) | Phased fix & completion plan (Phase 0 blockers → Phase 3 expansion), with status tracking |
 | [docs/checklist.md](docs/checklist.md) | Launch readiness checklist |
