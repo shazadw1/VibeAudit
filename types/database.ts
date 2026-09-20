@@ -19,6 +19,8 @@ export interface Database {
           onboarding_completed: boolean
           current_period_start: string | null
           current_period_end: string | null
+          subscription_status: string | null
+          cancel_at_period_end: boolean
           created_at: string
           updated_at: string
         }
@@ -31,6 +33,8 @@ export interface Database {
           onboarding_completed?: boolean
           current_period_start?: string | null
           current_period_end?: string | null
+          subscription_status?: string | null
+          cancel_at_period_end?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -43,6 +47,8 @@ export interface Database {
           onboarding_completed?: boolean
           current_period_start?: string | null
           current_period_end?: string | null
+          subscription_status?: string | null
+          cancel_at_period_end?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -237,6 +243,63 @@ export interface Database {
           kind?: 'scan' | 'repo' | 'monitored_repo' | 'fix_attempt' | 'certificate' | 'export' | 'api_request' | 'team_seat'
           occurred_at?: string
           ref_id?: string | null
+        }
+        Relationships: []
+      }
+      plans: {
+        Row: {
+          id: string
+          name: string
+          description: string
+          price_monthly: number
+          price_annual: number
+          stripe_price_id_monthly: string | null
+          stripe_price_id_annual: string | null
+          features: Json
+          display_order: number
+          active: boolean
+        }
+        Insert: {
+          id: string
+          name: string
+          description?: string
+          price_monthly?: number
+          price_annual?: number
+          stripe_price_id_monthly?: string | null
+          stripe_price_id_annual?: string | null
+          features?: Json
+          display_order?: number
+          active?: boolean
+        }
+        Update: {
+          id?: string
+          name?: string
+          description?: string
+          price_monthly?: number
+          price_annual?: number
+          stripe_price_id_monthly?: string | null
+          stripe_price_id_annual?: string | null
+          features?: Json
+          display_order?: number
+          active?: boolean
+        }
+        Relationships: []
+      }
+      stripe_events: {
+        Row: {
+          event_id: string
+          type: string
+          received_at: string
+        }
+        Insert: {
+          event_id: string
+          type: string
+          received_at?: string
+        }
+        Update: {
+          event_id?: string
+          type?: string
+          received_at?: string
         }
         Relationships: []
       }

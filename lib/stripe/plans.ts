@@ -37,17 +37,26 @@ export type PlanLimits = {
   team_seats: number | null;
 };
 
-/** Resolve a plan id from a Stripe price id (used by the webhook). */
-export function planIdFromPriceId(priceId: string | null | undefined): PlanId {
-  if (!priceId) return "free";
+const PRO_ANNUAL_PRICE_ID = process.env.STRIPE_PRO_ANNUAL_PRICE_ID;
+const AGENCY_ANNUAL_PRICE_ID = process.env.STRIPE_AGENCY_ANNUAL_PRICE_ID;
+
+/** Resolve a plan id from a Stripe price id (used by the webhook). Returns null for unrecognised price ids. */
+export function planIdFromPriceId(priceId: string | null | undefined): PlanId | null {
+  if (!priceId) return null;
   if (priceId === process.env.STRIPE_PRO_MONTHLY_PRICE_ID) return "pro";
   if (priceId === process.env.STRIPE_AGENCY_MONTHLY_PRICE_ID) return "agency";
-  return "free";
+  if (priceId === process.env.STRIPE_PRO_ANNUAL_PRICE_ID) return "pro";
+  if (priceId === process.env.STRIPE_AGENCY_ANNUAL_PRICE_ID) return "agency";
+  return null;
 }
 
 /** Resolve the Stripe price id for a checkout plan selection. */
-export function priceIdForPlan(plan: PlanId): string | undefined {
-  if (plan === "pro") return PLANS.PRO.priceId;
-  if (plan === "agency") return PLANS.AGENCY.priceId;
+export function priceIdForPlan(plan: PlanId, interval: "month" | "year" = "month"): string | undefined {
+  if (plan === "pro")    return interval === "year" ? process.env.STRIPE_PRO_ANNUAL_PRICE_ID    : process.env.STRIPE_PRO_MONTHLY_PRICE_ID;
+  if (plan === "agency") return interval === "year" ? process.env.STRIPE_AGENCY_ANNUAL_PRICE_ID : process.env.STRIPE_AGENCY_MONTHLY_PRICE_ID;
   return undefined;
 }
+
+// Keep references to suppress unused variable warnings
+void PRO_ANNUAL_PRICE_ID;
+void AGENCY_ANNUAL_PRICE_ID;

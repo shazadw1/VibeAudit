@@ -7,6 +7,7 @@ import type { Profile } from "@/types";
 
 const bodySchema = z.object({
   plan: z.enum(["pro", "agency"]),
+  interval: z.enum(["month", "year"]).default("month"),
 });
 
 export async function POST(request: Request) {
@@ -24,7 +25,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid plan" }, { status: 400 });
     }
 
-    const priceId = priceIdForPlan(parsed.data.plan);
+    const priceId = priceIdForPlan(parsed.data.plan, parsed.data.interval);
     if (!priceId) {
       return NextResponse.json({ error: "Plan is not available for purchase" }, { status: 400 });
     }
@@ -43,6 +44,25 @@ export async function POST(request: Request) {
       });
       customerId = customer.id;
       await supabase.from("profiles").update({ stripe_customer_id: customerId }).eq("id", user.id);
+    }
+
+    const subscriptionId = profile?.stripe_subscription_id;
+    const subscriptionStatus = (profile as { subscription_status?: string | null } | null)?.subscription_status;
+    const isActiveSubscription = subscriptionStatus === "active" || subscriptionStatus === "trialing";
+
+    if (subscriptionId && isActiveSubscription) {
+      const existingSub = await stripe.subscriptions.retrieve(subscriptionId);
+      const existingPriceId = existingSub.items.data[0]?.price.id;
+      if (existingPriceId === priceId) {
+        return NextResponse.json({ error: "Already on this plan" }, { status: 400 });
+      }
+
+      const item = existingSub.items.data[0];
+      await stripe.subscriptions.update(subscriptionId, {
+        items: [{ id: item.id, price: priceId }],
+        proration_behavior: "create_prorations",
+      });
+      return NextResponse.json({ updated: true });
     }
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin;

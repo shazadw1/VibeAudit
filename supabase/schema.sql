@@ -14,6 +14,8 @@ create table if not exists public.profiles (
   onboarding_completed boolean not null default false,
   current_period_start timestamptz,
   current_period_end timestamptz,
+  subscription_status text,
+  cancel_at_period_end boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -281,3 +283,30 @@ create policy "Users can select own usage_events" on public.usage_events
 
 create policy "Users can insert own usage_events" on public.usage_events
   for insert with check (auth.uid() = user_id);
+
+-- Plans table
+create table if not exists public.plans (
+  id text primary key,
+  name text not null,
+  description text not null default '',
+  price_monthly integer not null default 0,
+  price_annual integer not null default 0,
+  stripe_price_id_monthly text,
+  stripe_price_id_annual text,
+  features jsonb not null default '[]',
+  display_order integer not null default 0,
+  active boolean not null default true
+);
+
+alter table public.plans enable row level security;
+create policy "Authenticated users can read plans" on public.plans
+  for select using (auth.role() = 'authenticated');
+
+-- Stripe events dedup table
+create table if not exists public.stripe_events (
+  event_id text primary key,
+  type text not null,
+  received_at timestamptz not null default now()
+);
+
+alter table public.stripe_events enable row level security;

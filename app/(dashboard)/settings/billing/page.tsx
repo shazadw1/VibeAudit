@@ -1,217 +1,46 @@
-"use client";
+import { createClient } from "@/lib/supabase/server";
+import BillingClient from "./billing-client";
+import { effectivePlan } from "@/lib/entitlements";
 
-import React, { useState } from "react";
-import { CheckCircle2, Sparkles, Zap, Shield, Crown, ArrowRight, CreditCard, Clock, Check } from "lucide-react";
+export default async function BillingSettingsPage() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-export default function BillingSettingsPage() {
-  const [annual, setAnnual] = useState(false);
-  const [currentPlan, setCurrentPlan] = useState("pro");
-  const [upgrading, setUpgrading] = useState<string | null>(null);
+  const [{ data: plans }, { data: profile }] = await Promise.all([
+    supabase.from("plans").select("*").eq("active", true).order("display_order"),
+    user
+      ? supabase.from("profiles").select("*").eq("id", user.id).single()
+      : Promise.resolve({ data: null }),
+  ]);
 
-  const handleUpgrade = (planId: string) => {
-    setUpgrading(planId);
-    setTimeout(() => {
-      setCurrentPlan(planId);
-      setUpgrading(null);
-    }, 1800);
-  };
+  const planIds = (plans ?? []).map((p: { id: string }) => p.id);
+  const { data: limits } = await supabase.from("plan_limits").select("*").in("plan", planIds);
 
-  const plans = [
-    {
-      id: "free",
-      name: "Developer Free",
-      priceMonthly: 0,
-      priceAnnual: 0,
-      desc: "Perfect for solo developers testing AI security scans on personal projects.",
-      features: [
-        "1 Connected GitHub Repository",
-        "5 AST Security Scans / Month",
-        "Overall VibeScore & Grade Teaser",
-        "Community Discord Support",
-      ],
-      popular: false,
-    },
-    {
-      id: "pro",
-      name: "Pro AI Shield",
-      priceMonthly: 29,
-      priceAnnual: 23,
-      desc: "For startups and fast-shipping teams requiring continuous zero-day protection.",
-      features: [
-        "Unlimited Connected Repositories",
-        "Unlimited Deep AST & CVE Scans",
-        "✨ One-Click Autonomous AI PR Fixes",
-        "Continuous Git Push Webhook Shield",
-        "Instant Email & Discord Alerting",
-      ],
-      popular: true,
-    },
-    {
-      id: "agency",
-      name: "Agency & Enterprise",
-      priceMonthly: 99,
-      priceAnnual: 79,
-      desc: "For software agencies managing client codebases and custom compliance standards.",
-      features: [
-        "Everything in Pro AI Shield +",
-        "Up to 15 Organization Workspaces",
-        "White-Label Security Audit Reports",
-        "Custom AST Rules & Secret Scanning",
-        "Dedicated 24/7 Slack Support Channel",
-      ],
-      popular: false,
-    },
-  ];
+  const currentPlan = profile
+    ? effectivePlan({
+        plan: (profile as { plan: string }).plan,
+        subscription_status: (profile as { subscription_status: string | null }).subscription_status ?? null,
+        current_period_end: (profile as { current_period_end: string | null }).current_period_end ?? null,
+      })
+    : "free";
 
   return (
-    <div className="space-y-10 pb-20 max-w-6xl mx-auto">
-      {/* 1. Header & Billing Cycle Toggle */}
-      <div className="text-center space-y-4">
-        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-bold font-mono uppercase tracking-wider mb-1 shadow-sm">
-          <Crown className="h-4 w-4 text-amber-400" />
-          <span>SaaS Monetization & Quotas</span>
-        </div>
-        <h1 className="text-3xl md:text-5xl font-black text-white tracking-tight">
-          Flexible Plans for <span className="text-gradient">Secure Teams</span>
-        </h1>
-        <p className="text-base text-slate-300 max-w-2xl mx-auto font-medium">
-          Scale your autonomous AI security audits. Upgrade anytime to unlock instant code-fix PRs and continuous CI/CD push monitoring.
-        </p>
-
-        {/* Annual Toggle Switch */}
-        <div className="flex items-center justify-center gap-4 pt-4">
-          <span className={`text-sm font-bold ${!annual ? "text-white" : "text-slate-400"}`}>Monthly Billing</span>
-          <button
-            onClick={() => setAnnual(!annual)}
-            className="w-14 h-8 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 p-1 transition-all relative shadow-inner"
-          >
-            <span
-              className={`w-6 h-6 rounded-full bg-white block transition-transform shadow-md ${
-                annual ? "translate-x-6" : "translate-x-0"
-              }`}
-            />
-          </button>
-          <span className={`text-sm font-bold flex items-center gap-2 ${annual ? "text-white" : "text-slate-400"}`}>
-            <span>Annual Billing</span>
-            <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-[11px] font-extrabold text-emerald-300 font-mono">
-              SAVE 20%
-            </span>
-          </span>
-        </div>
-      </div>
-
-      {/* 2. Usage Quota Meter Card */}
-      <div className="glass-card rounded-3xl p-6 border border-white/15 bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-transparent shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div className="space-y-1">
-          <span className="text-xs font-bold font-mono uppercase text-indigo-300">Active Workspace Quota</span>
-          <h3 className="text-lg font-black text-white">Current Plan: {currentPlan === "pro" ? "Pro AI Shield" : currentPlan === "agency" ? "Agency Enterprise" : "Developer Free"}</h3>
-          <p className="text-xs text-slate-300 font-medium">Your subscription renews automatically on August 5, 2026.</p>
-        </div>
-
-        <div className="flex items-center gap-8">
-          <div className="space-y-1.5 w-48">
-            <div className="flex justify-between text-xs font-bold font-mono text-slate-300">
-              <span>AST Scans</span>
-              <span className="text-emerald-400">Unlimited</span>
-            </div>
-            <div className="w-full h-2 rounded-full bg-black/60 overflow-hidden border border-white/10">
-              <div className="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 w-full rounded-full"></div>
-            </div>
-          </div>
-
-          <div className="space-y-1.5 w-48">
-            <div className="flex justify-between text-xs font-bold font-mono text-slate-300">
-              <span>AI Fix PRs</span>
-              <span className="text-purple-400">Active (14 PRs)</span>
-            </div>
-            <div className="w-full h-2 rounded-full bg-black/60 overflow-hidden border border-white/10">
-              <div className="h-full bg-gradient-to-r from-purple-500 to-pink-500 w-3/4 rounded-full"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* 3. Luxury Pricing Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        {plans.map((p) => {
-          const isCurrent = currentPlan === p.id;
-          const isUpgrading = upgrading === p.id;
-          const price = annual ? p.priceAnnual : p.priceMonthly;
-
-          return (
-            <div
-              key={p.id}
-              className={`glass-card rounded-3xl p-8 border transition-all duration-300 flex flex-col justify-between relative overflow-hidden shadow-xl ${
-                p.popular
-                  ? "border-indigo-500/60 bg-gradient-to-b from-indigo-500/15 via-purple-500/10 to-transparent shadow-glow scale-105 z-10"
-                  : "border-white/15 bg-white/[0.02] hover:border-white/30"
-              }`}
-            >
-              {p.popular && (
-                <div className="absolute top-0 right-0 bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-[10px] font-extrabold uppercase font-mono px-4 py-1.5 rounded-bl-2xl tracking-wider shadow-md">
-                  Most Popular
-                </div>
-              )}
-
-              <div>
-                <h3 className="text-xl font-black text-white">{p.name}</h3>
-                <p className="text-xs text-slate-300 font-medium mt-1.5 min-h-[32px]">{p.desc}</p>
-
-                <div className="my-6 flex items-baseline gap-1">
-                  <span className="text-4xl md:text-5xl font-black font-mono text-white">${price}</span>
-                  <span className="text-xs font-bold text-slate-400">/ month {annual && "(billed annually)"}</span>
-                </div>
-
-                <div className="space-y-3 pt-4 border-t border-white/10">
-                  <span className="text-xs font-bold font-mono uppercase tracking-wider text-slate-300 block mb-2">
-                    Included Capabilities:
-                  </span>
-                  {p.features.map((feat) => (
-                    <div key={feat} className="flex items-start gap-2.5">
-                      <CheckCircle2 className="h-4 w-4 text-emerald-400 mt-0.5 shrink-0" />
-                      <span className="text-xs text-slate-200 font-medium">{feat}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="pt-8">
-                <button
-                  onClick={() => handleUpgrade(p.id)}
-                  disabled={isCurrent || isUpgrading}
-                  className={`w-full py-4 rounded-2xl font-extrabold text-xs transition-all duration-300 flex items-center justify-center gap-2 shadow-lg ${
-                    isCurrent
-                      ? "bg-white/10 text-slate-400 cursor-default border border-white/10"
-                      : isUpgrading
-                      ? "bg-indigo-500/50 text-indigo-200 cursor-wait"
-                      : p.popular
-                      ? "bg-gradient-to-r from-indigo-500 via-purple-600 to-pink-500 hover:opacity-95 text-white shadow-glow hover:scale-105"
-                      : "bg-white/[0.08] hover:bg-white/[0.15] text-white border border-white/15"
-                  }`}
-                >
-                  {isCurrent ? (
-                    <>
-                      <Check className="h-4 w-4 text-emerald-400" />
-                      <span>Current Active Plan</span>
-                    </>
-                  ) : isUpgrading ? (
-                    <>
-                      <span className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-                      <span>Processing Stripe...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CreditCard className="h-4 w-4" />
-                      <span>{p.priceMonthly === 0 ? "Downgrade to Free" : `Upgrade to ${p.name}`}</span>
-                      <ArrowRight className="h-4 w-4 ml-0.5" />
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    <BillingClient
+      plans={(plans ?? []).map((p: Record<string, unknown>) => ({
+        id: p.id as string,
+        name: p.name as string,
+        description: p.description as string,
+        price_monthly: p.price_monthly as number,
+        price_annual: p.price_annual as number,
+        display_order: p.display_order as number,
+        active: p.active as boolean,
+        features: Array.isArray(p.features) ? (p.features as string[]) : [],
+      }))}
+      limits={limits ?? []}
+      currentPlan={currentPlan}
+      hasStripeCustomer={!!(profile as { stripe_customer_id?: string | null } | null)?.stripe_customer_id}
+    />
   );
 }

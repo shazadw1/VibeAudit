@@ -29,6 +29,17 @@ export async function POST(request: Request) {
 
   const supabase = createAdminClient();
 
+  // Idempotency check
+  const { error: dedupError } = await supabase
+    .from('stripe_events')
+    .insert({ event_id: event.id, type: event.type });
+  if (dedupError) {
+    if (dedupError.code === '23505') {
+      return NextResponse.json({ received: true, duplicate: true });
+    }
+    console.error('[Stripe Webhook] stripe_events insert error:', dedupError);
+  }
+
   try {
     switch (event.type) {
       case "checkout.session.completed": {
@@ -43,7 +54,12 @@ export async function POST(request: Request) {
           let periodUpdate: Record<string, string> = {};
           if (subscriptionId) {
             const sub = await stripe.subscriptions.retrieve(subscriptionId);
-            plan = planIdFromPriceId(sub.items.data[0]?.price.id);
+            const resolvedPlan = planIdFromPriceId(sub.items.data[0]?.price.id);
+            if (resolvedPlan === null) {
+              console.error('[Stripe Webhook] Unknown price id, skipping plan update:', sub.items.data[0]?.price.id);
+              break;
+            }
+            plan = resolvedPlan;
             periodUpdate = {
               current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
               current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
@@ -67,12 +83,29 @@ export async function POST(request: Request) {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
         const active = sub.status === "active" || sub.status === "trialing";
-        const plan = active ? planIdFromPriceId(sub.items.data[0]?.price.id) : "free";
+        if (!active) {
+          // For non-active subscriptions just update status fields
+          await supabase
+            .from("profiles")
+            .update({
+              subscription_status: sub.status,
+              cancel_at_period_end: sub.cancel_at_period_end,
+            })
+            .eq("stripe_customer_id", customerId);
+          break;
+        }
+        const resolvedPlan = planIdFromPriceId(sub.items.data[0]?.price.id);
+        if (resolvedPlan === null) {
+          console.error('[Stripe Webhook] Unknown price id, skipping plan update:', sub.items.data[0]?.price.id);
+          break;
+        }
         await supabase
           .from("profiles")
           .update({
-            plan,
+            plan: resolvedPlan,
             stripe_subscription_id: sub.id,
+            subscription_status: sub.status,
+            cancel_at_period_end: sub.cancel_at_period_end,
             current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
             current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
           })
@@ -85,7 +118,29 @@ export async function POST(request: Request) {
         const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
         await supabase
           .from("profiles")
-          .update({ plan: "free", stripe_subscription_id: null, current_period_start: null, current_period_end: null })
+          .update({ plan: "free", stripe_subscription_id: null, subscription_status: null, cancel_at_period_end: false, current_period_start: null, current_period_end: null })
+          .eq("stripe_customer_id", customerId);
+        break;
+      }
+
+      case "invoice.payment_failed": {
+        const invoice = event.data.object as Stripe.Invoice;
+        const customerId = typeof invoice.customer === "string" ? invoice.customer : (invoice.customer as Stripe.Customer)?.id;
+        if (customerId) {
+          await supabase
+            .from("profiles")
+            .update({ subscription_status: "past_due" })
+            .eq("stripe_customer_id", customerId);
+        }
+        break;
+      }
+
+      case "customer.subscription.paused": {
+        const sub = event.data.object as Stripe.Subscription;
+        const customerId = typeof sub.customer === "string" ? sub.customer : (sub.customer as Stripe.Customer).id;
+        await supabase
+          .from("profiles")
+          .update({ subscription_status: "paused" })
           .eq("stripe_customer_id", customerId);
         break;
       }

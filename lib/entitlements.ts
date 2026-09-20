@@ -125,10 +125,28 @@ async function countUsage(
   return count ?? 0;
 }
 
+type EffectivePlanProfile = {
+  plan: string;
+  subscription_status: string | null;
+  current_period_end: string | null;
+};
+
+export function effectivePlan(profile: EffectivePlanProfile): string {
+  if (
+    (profile.subscription_status === 'past_due' || profile.subscription_status === 'unpaid') &&
+    profile.current_period_end !== null &&
+    new Date() > new Date(profile.current_period_end)
+  ) {
+    return 'free';
+  }
+  return profile.plan;
+}
+
 type CheckProfile = {
   plan: string;
-  current_period_start: string | null;
+  subscription_status?: string | null;
   current_period_end: string | null;
+  current_period_start: string | null;
   created_at: string;
 };
 
@@ -138,7 +156,7 @@ export async function checkLimit(
   kind: LimitKind,
   profile: CheckProfile
 ): Promise<{ ok: true } | { ok: false; response: Response }> {
-  const limits = await getPlanLimits(supabase, profile.plan);
+  const limits = await getPlanLimits(supabase, effectivePlan({ ...profile, subscription_status: profile.subscription_status ?? null }));
   const col = limitColumn(kind);
   const max = limits[col];
 
