@@ -333,125 +333,186 @@ index: 2026-09-20T01:10:58Z (1789866658712), files: 91, stale: yes
   database behind the same helper.
 
 ## In Scope
-- A single server-side entitlement helper, `lib/entitlements.ts`, exposing
-  `getPlanLimits(plan)` and `checkLimit(userId, kind)` for kinds `scan`, `repo`, and
-  `fix_attempt`, reading values from `lib/stripe/plans.ts` today (plan item 3 swaps the
-  source later). Per `docs/checklist.md` line 112.
-- Extend `lib/stripe/plans.ts` with the full limit shape for every kind the plan item names
-  (`scansPerMonth`, `reposLimit`, `monitoredReposLimit`, `fixAttemptsPerMonth`,
-  `certificatesPerMonth`, `exportsPerMonth`, `apiRequestsPerDay`, `teamSeats`), with
-  explicit numbers for free/pro/agency; `Infinity` allowed. Per `docs/checklist.md` line 75.
-- Enforce, before any side effect, in the three routes that exist:
-  `app/api/scan/start/route.ts` (monthly scans), `app/api/github/connect/route.ts`
-  (connected repos, counted after sync would exceed the limit), and
-  `app/api/fix/generate/route.ts` (fix attempts, even while simulated, so the counter is
-  real when the feature is).
-- A uniform limit-exceeded response: HTTP 402, body `{ error, code: "plan_limit_exceeded",
-  limit: { kind, used, max, resets_at }, upgrade: "/settings/billing" }`. Per
-  `docs/checklist.md` line 138.
-- Counting via existing tables (`scans` by `user_id` and `started_at`; `repos` by
-  `user_id`), no new schema, using the period rule decided in Approval Notes.
-- Route tests for each gate (limit reached returns 402 and performs no fetch/sync/insert;
-  under limit proceeds) and a unit test for `getPlanLimits`.
-- Tick `docs/checklist.md` lines 112-113 at close-out (controller).
+Decided scope (Approval Notes decisions 1-6). Per `docs/checklist.md` "Usage Limits"
+lines 112-115, "Upgrade Options" lines 136-140, "Plan Catalogue" line 75, and
+`Roadmap.md` "Phase 1" item 1:
+- **Limits stored in the database, not `plans.ts`.** A new `public.plan_limits` table
+  (one row per plan id, one column per kind) seeded by migration with the placeholder
+  values in Approval Notes decision 6. `lib/stripe/plans.ts` keeps price mapping and
+  `features` copy only; `scansPerMonth`/`reposLimit` are removed from it so there is one
+  source. Admin editing of these rows is plan item 3.
+- **Usage counted from one append-only ledger.** New `public.usage_events`
+  (`user_id, kind, occurred_at, ref_id`) written by every gated route, including
+  upload-path scans on `/api/scan/start` that persist nothing else. RLS: users can select
+  and insert their own rows; no update or delete.
+- **Period = Stripe billing period.** New `profiles.current_period_start` and
+  `current_period_end` columns, written by `app/api/stripe/webhook/route.ts` on
+  `checkout.session.completed` (lines 47-54) and `customer.subscription.updated/created`
+  (lines 65-68) from `sub.current_period_start/end`, cleared on `deleted` (lines 75-78).
+  Free users with null columns fall back to a calendar month anchored on
+  `profiles.created_at`.
+- **One entitlement helper**, `lib/entitlements.ts`: `getPlanLimits(plan)` reads
+  `plan_limits`; `currentPeriod(profile)`; `checkLimit(supabase, userId, kind)` returns
+  `{ ok: true }` or `{ ok: false, response }` with the 402 body below; `recordUsage(...)`.
+  All eight kinds are first-class: `scan`, `repo`, `monitored_repo`, `fix_attempt`,
+  `certificate`, `export`, `api_request`, `team_seat`.
+- **Enforcement points**, all reading `plan` from the caller's `profiles` row server-side:
+  - `scan`: `app/api/scan/start/route.ts` both paths.
+  - `repo`: `app/api/github/connect/route.ts` `POST`.
+  - `fix_attempt`: `app/api/fix/generate/route.ts`, even while simulated.
+  - `monitored_repo`: a new minimal `app/api/monitoring/route.ts` `POST { repoId, enabled }`
+    that upserts `monitoring_config` (`supabase/schema.sql:68-73`, currently has no
+    writer) and refuses enabling beyond the limit. This is the only new feature route.
+  - `certificate`, `export`, `api_request`, `team_seat`: no feature exists to gate, so
+    enforcement is the helper kind plus a unit test proving `checkLimit` blocks at the
+    limit. A source-level guard test asserts every `app/api/**/route.ts` that writes a
+    `usage_events` row calls `checkLimit` first, so the first real route for these kinds
+    cannot skip it. (Ruling on decision 1's "routes or checks"; see Approval Notes.)
+- **Uniform 402 response**: `{ error, code: "plan_limit_exceeded", limit: { kind, used,
+  max, period_end }, upgrade: "/settings/billing" }`. Per checklist line 138.
+- **Downgrade rule** (decision 4): existing rows stay; new creations of any kind return
+  402 until under the limit; scans of already-connected repos allowed up to the scan
+  limit. No row is ever removed or disabled by this item.
+- Tests for each enforcement point, the helper, the period fallback, and the webhook
+  period write.
+- Tick `docs/checklist.md` lines 112-114 and 136 at close-out (controller).
 
 ## Out of Scope
-- Enforcing monitored repos, certificates, exports, API usage, or team seats: no route
-  exists to gate. Their *values* are defined here so those routes inherit them when built
-  (plan items 15+; `docs/checklist.md` lines 261, 269-272).
-- A usage ledger table (`docs/checklist.md` lines 115 and 321), AI cost tracking (line 116),
-  top-up credits and included budgets (lines 117-121), daily caps (line 122), Redis-backed
-  rate limits (line 111). Separate items.
-- Storing Stripe `current_period_start/end` on `profiles` and the webhook change to write
-  them (`docs/checklist.md` line 136) **unless** Approval Notes decision 2 picks billing
-  period; then it moves in scope as a `supabase/migrations/` addition plus a webhook edit.
-- Making limit values database-backed and admin-editable (plan item 3, checklist lines
-  13, 74, 91).
-- Downgrade behaviour for users already over their new limit (checklist line 140) beyond
-  the rule fixed in Approval Notes decision 4.
-- Any change to checkout, portal, or subscription update flows (plan item 2).
-- UI changes beyond consuming the 402 body; the dashboard can show "limit reached" in a
-  later micro item.
+- The admin role model and settings UI that edits `plan_limits` (plan item 3; checklist
+  lines 62-63 and 84-99). This item makes the rows exist; item 3 makes them editable.
+- Making downgrades apply at period end rather than immediately (checklist line 135;
+  plan item 2). This item assumes the webhook flips `plan` whenever Stripe says so and
+  applies the downgrade rule at that moment, whenever it is.
+- Building certificates, exports, API keys, or team invitations. Only the limit kinds
+  and the guard exist; the features are Phase 3 (plan items 15+).
+- AI cost tracking, included budgets, top-ups, markup (checklist lines 116-121);
+  daily caps (line 122); Redis-backed rate limits (line 111); status polling limits
+  (line 124).
+- Dashboard UI for "limit reached" beyond passing the 402 body through; a later micro
+  item can render it.
+- Any change to checkout, portal, or subscription-update flows (plan item 2).
+- Removing the in-memory `rateLimit` calls; they stay as abuse protection.
 
 ## Implementation Tasks
-- [ ] `lib/stripe/plans.ts`: add a `limits` object to each plan in `PLANS` with all eight
-      kinds and a `PlanLimits` type; keep `features` copy unchanged (marketing copy is
-      high-risk and out of this item).
-- [ ] `lib/entitlements.ts` (new): `getPlanLimits(plan: PlanId): PlanLimits`;
-      `getUsage(supabase, userId, kind, periodStart)`; `checkLimit(...)` returning
-      `{ ok: true } | { ok: false, response: NextResponse }` with the 402 body shape above.
-      Period start computed per Approval Notes decision 2. Treat `Infinity` as no check.
-- [ ] `app/api/scan/start/route.ts`: after auth and rate limit, before parsing the repo,
-      call `checkLimit(..., "scan")`; apply to the fetch path, and to the upload path per
-      Approval Notes decision 3. Read `plan` from the caller's `profiles` row server-side,
-      never from the request.
-- [ ] `app/api/github/connect/route.ts` `POST`: after `syncInstallationRepos`, or before it
-      using the installation's repo count, refuse when the user's `repos` count would
-      exceed `reposLimit`; on refusal, roll back or skip the upsert so no rows above the
-      limit persist. Return 402.
-- [ ] `app/api/fix/generate/route.ts`: call `checkLimit(..., "fix_attempt")` before the
-      simulated response; count attempts from `fix_prs` rows if that table is the right
-      sink, otherwise document the counting source in the helper.
-- [ ] `lib/__tests__/entitlements.test.ts`: `getPlanLimits` for all three plans; `checkLimit`
-      at 0, limit-1, limit, and `Infinity`; period boundary per decision 2.
-- [ ] `app/api/scan/start/__tests__/route.test.ts`: add a free-plan user at 1 scan this
-      period gets 402 with `code: "plan_limit_exceeded"` and no `fetchRepoFiles` call.
-- [ ] `app/api/github/connect/__tests__/route.test.ts` (new): free user with 1 repo
-      connecting a second gets 402 and no upsert.
-- [ ] `lib/demo.ts` / any `DEMO_MODE` branch in the gated routes: confirm the demo profile
-      does not bypass `checkLimit` in production.
+- [ ] `supabase/migrations/<ts>_plan_limits_and_usage.sql`: create `plan_limits`
+      (`plan text primary key check in ('free','pro','agency')`, eight integer columns
+      with `null` meaning unlimited, `updated_at`), seed three rows with decision 6 values;
+      create `usage_events` (`id uuid`, `user_id uuid references profiles`, `kind text`
+      check in the eight kinds, `occurred_at timestamptz default now()`, `ref_id text`)
+      with index on `(user_id, kind, occurred_at)`; add `current_period_start` and
+      `current_period_end timestamptz` to `profiles`. RLS: `plan_limits` select for all
+      authenticated, no client writes; `usage_events` select/insert own rows only. Mirror
+      into `supabase/schema.sql`.
+- [ ] `types/database.ts`: add the two tables and the two profile columns.
+- [ ] `lib/stripe/plans.ts`: delete `scansPerMonth` and `reposLimit`; export a
+      `LIMIT_KINDS` tuple and `PlanLimits` type; leave `features` copy byte-identical.
+- [ ] `lib/entitlements.ts` (new): `getPlanLimits`, `currentPeriod`, `checkLimit`,
+      `recordUsage`, `limitExceededResponse`. `null` limit = no check. Counting is one
+      `usage_events` count query per check, scoped to `user_id`, `kind`, and
+      `occurred_at >= period_start`; `repo`, `monitored_repo`, and `team_seat` are
+      **standing** counts (rows in `repos`, enabled rows in `monitoring_config`, seats
+      table when it exists) rather than period counts. Document which kinds are which.
+- [ ] `app/api/stripe/webhook/route.ts`: write `current_period_start/end` at lines 47-54
+      and 65-68 from `sub.current_period_start/end` (epoch seconds to ISO); set both to
+      `null` at lines 75-78.
+- [ ] `app/api/scan/start/route.ts`: after auth and rate limit, `checkLimit(..., "scan")`;
+      on success `recordUsage("scan", ref_id = scanId or "upload")` for both paths.
+- [ ] `app/api/github/connect/route.ts` `POST`: before `syncInstallationRepos`, compare the
+      user's current `repos` count plus the installation's accessible repo count against
+      the limit; refuse with 402 if it would exceed; otherwise sync and record one
+      `repo` event per new row.
+- [ ] `app/api/fix/generate/route.ts`: `checkLimit(..., "fix_attempt")` then
+      `recordUsage` before the simulated response.
+- [ ] `app/api/monitoring/route.ts` (new): auth, rate limit, body `{ repoId, enabled }`,
+      verify the repo belongs to the user, `checkLimit(..., "monitored_repo")` when
+      enabling, upsert `monitoring_config`, `recordUsage`. Disabling always allowed.
+- [ ] `lib/__tests__/entitlements.test.ts`: all eight kinds at 0, max-1, max, `null`;
+      period fallback for null columns; 402 body shape.
+- [ ] `app/api/scan/start/__tests__/route.test.ts`: free user at limit gets 402 with no
+      fetch; upload path records a usage event.
+- [ ] `app/api/github/connect/__tests__/route.test.ts`, `app/api/fix/generate/__tests__/`,
+      `app/api/monitoring/__tests__/` (new): limit reached returns 402 and no write.
+- [ ] `app/api/stripe/webhook/__tests__/route.test.ts` (new): subscription events write
+      period columns; deleted clears them. Stripe SDK mocked; no live calls.
+- [ ] `lib/__tests__/entitlement-guard.test.ts`: reads every `app/api/**/route.ts`; any
+      file containing `usage_events` or `recordUsage(` must also contain `checkLimit(`.
+- [ ] `lib/demo.ts` and any `DEMO_MODE` branch in gated routes: confirm the demo profile
+      never bypasses `checkLimit` in production.
 
 ## Acceptance Criteria
-- Launch check (docs/plan.md item 6): limits are enforced server-side for UI and direct API
-  calls. A `curl` with a valid session cookie against each of the three routes hits the
-  same 402 as the UI.
-- A free-plan user with one scan in the current period gets 402 from `/api/scan/start` and
-  no GitHub request, `scans` insert, or `findings` insert occurs.
-- A free-plan user with one connected repo gets 402 from `/api/github/connect` and the
-  `repos` table is unchanged.
-- Pro users are never blocked on scans or repos; agency users are blocked at 15 repos.
-- Every 402 body carries `code: "plan_limit_exceeded"`, the `limit` object, and
-  `upgrade`.
-- The plan used for the check comes from the `profiles` row, not the request body or a
-  client-controlled header.
-- `lib/stripe/plans.ts` exports a limit value for all eight kinds on all three plans.
-- `npx tsc --noEmit`, `npx next lint`, `npx vitest run` pass; P4's tests are untouched.
+- Launch check (docs/plan.md item 6): limits are enforced server-side for UI and direct
+  API calls; a `curl` with a session cookie hits the same 402 as the UI on every gated
+  route.
+- Free user with one `scan` event this period: `/api/scan/start` returns 402, no GitHub
+  request, no `scans`/`findings`/`usage_events` write.
+- Free user with one repo: `/api/github/connect` returns 402 and `repos` is unchanged.
+- Free user: `/api/monitoring` enable returns 402; disable succeeds.
+- Agency user: blocked at the 15th repo; pro user: never blocked on scans or repos.
+- After a `customer.subscription.updated` event, `profiles.current_period_start/end`
+  equal the subscription's values; after `deleted`, both are null and the free fallback
+  period applies.
+- Every 402 carries `code: "plan_limit_exceeded"`, the `limit` object, and `upgrade`.
+- The plan and period used come from `profiles`, never from the request.
+- `lib/stripe/plans.ts` no longer defines numeric limits; `plan_limits` has three seeded
+  rows with all eight columns.
+- Downgrade: a free profile with 10 existing repos can still scan them (up to the scan
+  limit) but cannot connect an 11th or enable monitoring.
+- The guard test fails if any API route records usage without checking the limit.
+- `npx tsc --noEmit`, `npx next lint`, `npx vitest run` pass; P4 tests untouched.
 
 ## Verification
-- `npx vitest run lib app/api/scan/start app/api/github/connect` during work.
-- Manual, needs a live Supabase (mark `Needs Verification` if unavailable): with a free
-  profile, run one scan, confirm the second returns 402 and the dashboard surfaces the
-  message; connect an installation exposing two repos, confirm one persists. Flip the
-  profile to `pro` directly in the database and confirm both succeed.
+- `npx vitest run lib app/api` during work.
+- Migration applied to a scratch Supabase project (never production) and `schema.sql`
+  diffed against it.
+- **Required live check** (mark `Needs Verification` if unavailable): free profile runs
+  one repo scan and one upload scan, third returns 402; connects a two-repo installation,
+  one persists; enabling monitoring returns 402. Send a Stripe test-mode
+  `customer.subscription.updated` via the CLI to a local webhook and confirm the period
+  columns. Flip the profile to `pro` in the database and confirm all succeed.
 - Reviewer (high-risk lane, `.claude/agents/reviewer.md`): reproduce the bypass on the
-  pre-fix tree (free user, two scans) in a scratch copy with stubbed Supabase; confirm no
-  route reads `plan` from the request; rerun `scripts/factory/verify.sh --full` itself.
+  pre-fix tree (free user, two scans) in a scratch copy; confirm no route trusts `plan`
+  from the client; confirm the migration's RLS blocks a user reading another user's
+  `usage_events`; rerun `scripts/factory/verify.sh --full` itself.
 - Never call live Stripe or GitHub with real credentials (`CLAUDE.md` §4).
 
 ## Approval Notes
 WARNING: codegraph index is stale (index_older_than_head); re-indexing is a human decision, not this script's
-Open questions for the human/controller before this leaves `pending`/`draft`. Each changes
-the implementation:
-1. **Scope: enforce only what exists?** The plan item lists eight limit kinds; only scans,
-   connected repos, and (simulated) fix attempts have routes. The draft defines all eight
-   values but enforces three. Confirm, or name additional surfaces to build routes for.
-2. **Period: calendar month or Stripe billing period?** `docs/checklist.md` line 114 says
-   billing period, but `profiles` has no period columns and the webhook does not write
-   them. Calendar month (UTC, from `scans.started_at`) needs no schema change and ships
-   now; billing period adds a migration and a `supabase/` + `app/api/stripe/webhook/`
-   edit, both high-risk paths, and a fallback rule for free users with no subscription.
-   Draft recommends calendar month now, billing period as a follow-up when item 2 lands.
-3. **Do upload-path scans count?** `/api/scan/start` with `files` persists nothing. Counting
-   them needs a lightweight usage row; not counting them lets a free user scan unlimited
-   uploads. Draft recommends counting them, which pulls a minimal `usage_events` table
-   into scope (conflicts with the no-schema assumption above; resolve together with 2).
-4. **Downgrade over limit.** When a pro user with 10 repos drops to free, the draft rule
-   is: existing rows stay, new connects are refused, scans of already-connected repos are
-   allowed up to the scan limit. Confirm or change.
-5. **Limit numbers for kinds with no route.** Draft proposes: monitored repos free 0 / pro
-   Infinity / agency 15; fix attempts free 0 / pro 50 / agency 200 per month; certificates
-   and exports free 0 / pro Infinity / agency Infinity; API requests per day free 0 / pro
-   1000 / agency 5000; team seats free 1 / pro 1 / agency 5. These are placeholders for
-   product decision, not derived from anything in the repo.
+Decisions recorded 2026-09-20 by the user (controller session). Binding for implementer and
+reviewer; a deviation is a decision outside the brief and must stop for the user.
+
+1. **Scope: all eight kinds.** Scans, connected repos, monitored repos, fix attempts,
+   certificates, exports, API usage, team seats. Controller ruling on the user's "routes
+   or checks": a real route is built only where a table already exists to gate
+   (`monitoring_config`); the four kinds with no feature get helper enforcement, unit
+   tests, and the source-level guard, not stub routes. Confirm or overrule this ruling.
+2. **Period: Stripe billing period**, stored on `profiles` by the webhook; calendar-month
+   fallback anchored on `profiles.created_at` for profiles with null period columns.
+3. **Usage source: a single `usage_events` ledger** written by every gated route. Upload
+   scans count.
+4. **Downgrade: keep rows, block new.** Nothing destructive. Downgrade *timing* (period
+   end vs immediate) is plan item 2's responsibility; this item applies the rule at
+   whatever moment `profiles.plan` changes.
+5. **Limit values are data, not code.** They live in `plan_limits` rows and are meant to
+   be admin-edited via UI. Split: this item creates and seeds the table and reads from
+   it; plan item 3 builds the admin role model and the editing UI.
+6. **Seed values** (placeholders, editable once item 3 lands; `null` = unlimited):
+
+   | kind | free | pro | agency |
+   |---|---|---|---|
+   | scans / period | 1 | null | null |
+   | connected repos | 1 | null | 15 |
+   | monitored repos | 0 | null | 15 |
+   | fix attempts / period | 0 | 50 | 200 |
+   | certificates / period | 0 | null | null |
+   | exports / period | 0 | null | null |
+   | api requests / day | 0 | 1000 | 5000 |
+   | team seats | 1 | 1 | 5 |
+
+   These are not derived from anything in the repo; they exist so the migration has
+   values and match today's `plans.ts` for scans and repos.
+
+Assumptions recorded, not decisions: `api_request` is a per-day kind while the others are
+per-period or standing; the `features` marketing strings in `plans.ts` are not touched.
 The codegraph index was stale when drafted (warning above); context confirmed by direct
-file reads on 2026-09-20.
+file reads on 2026-09-20. No remaining open questions except confirmation of the ruling
+in decision 1.
