@@ -1,4 +1,5 @@
 import type { ScanFile } from "@/lib/scan/rules";
+import type { getInstallationOctokit } from "@/lib/github/app";
 
 const CODE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|sql|py|rb|go|php|env|yml|yaml|json)$/i;
 const SKIP_PATH = /(^|\/)(node_modules|\.next|dist|build|\.git|vendor|coverage)\//;
@@ -15,24 +16,78 @@ export interface FetchedRepo {
   truncated: boolean;
 }
 
-function ghHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "User-Agent": "VibeAudit-Scanner",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  // Optional token raises rate limits and enables private repos. Never hardcoded.
-  const token = process.env.GITHUB_TOKEN || process.env.GITHUB_PAT;
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
+type InstallationOctokit = Awaited<ReturnType<typeof getInstallationOctokit>>;
+export type GithubClient = { anonymous: true } | NonNullable<InstallationOctokit>;
+
+const BASE_HEADERS: Record<string, string> = {
+  Accept: "application/vnd.github+json",
+  "User-Agent": "VibeAudit-Scanner",
+  "X-GitHub-Api-Version": "2022-11-28",
+};
+
+async function apiGet(path: string, client: GithubClient): Promise<any> {
+  if ("anonymous" in client) {
+    const res = await fetch(`https://api.github.com${path}`, {
+      headers: BASE_HEADERS,
+      cache: "no-store",
+    });
+    if (res.status === 404) throw new Error("Repository or branch not found (is it public?)");
+    if (res.status === 403) throw new Error("GitHub API rate limit hit");
+    if (!res.ok) throw new Error(`GitHub API error ${res.status}`);
+    return res.json();
+  } else {
+    const { data } = await (client as any).request(`GET ${path}`);
+    return data;
+  }
 }
 
-async function ghJson(url: string): Promise<any> {
-  const res = await fetch(url, { headers: ghHeaders(), cache: "no-store" });
-  if (res.status === 404) throw new Error("Repository or branch not found (is it public?)");
-  if (res.status === 403) throw new Error("GitHub API rate limit hit — set GITHUB_TOKEN to raise it");
-  if (!res.ok) throw new Error(`GitHub API error ${res.status}`);
-  return res.json();
+async function getBlobContent(
+  fullName: string,
+  fileSha: string,
+  client: GithubClient
+): Promise<string | null> {
+  const [owner, repo] = fullName.split("/");
+  try {
+    if ("anonymous" in client) {
+      const res = await fetch(
+        `https://api.github.com/repos/${fullName}/git/blobs/${fileSha}`,
+        {
+          headers: {
+            ...BASE_HEADERS,
+            Accept: "application/vnd.github.raw+json",
+          },
+          cache: "no-store",
+        }
+      );
+      if (!res.ok) return null;
+      const content = await res.text();
+      if (content.length > MAX_FILE_BYTES) return null;
+      return content;
+    } else {
+      const { data } = await (client as any).request(
+        `GET /repos/{owner}/{repo}/git/blobs/{file_sha}`,
+        {
+          owner,
+          repo,
+          file_sha: fileSha,
+          headers: { accept: "application/vnd.github.raw+json" },
+        }
+      );
+      // data may be a string (raw) or an object with content
+      if (typeof data === "string") {
+        if (data.length > MAX_FILE_BYTES) return null;
+        return data;
+      }
+      if (data?.content) {
+        const decoded = Buffer.from(data.content, "base64").toString("utf-8");
+        if (decoded.length > MAX_FILE_BYTES) return null;
+        return decoded;
+      }
+      return null;
+    }
+  } catch {
+    return null;
+  }
 }
 
 /** Run an async mapper over items with a bounded concurrency pool. */
@@ -60,19 +115,25 @@ export function parseRepoInput(input: string): { fullName: string; branch?: stri
 }
 
 /**
- * Fetch a repository's scannable files. Uses the Git Trees API to list files
- * (one API call) and raw.githubusercontent.com to download contents (which is
- * NOT counted against the API rate limit), so a public repo scans without a
- * token. Provide GITHUB_TOKEN for private repos or higher limits.
+ * Fetch a repository's scannable files via the GitHub API.
+ * The caller must supply an explicit client:
+ *   - { anonymous: true } for public repos with no auth token
+ *   - an installation Octokit from getInstallationOctokit() for private/installation-scoped access
+ * No environment token (GITHUB_TOKEN / GITHUB_PAT) is ever read here.
  */
-export async function fetchRepoFiles(fullName: string, branch?: string): Promise<FetchedRepo> {
+export async function fetchRepoFiles(
+  fullName: string,
+  branch: string | undefined,
+  client: GithubClient
+): Promise<FetchedRepo> {
   // Repo metadata gives us the numeric id and the default branch.
-  const repo = await ghJson(`https://api.github.com/repos/${fullName}`);
+  const repo = await apiGet(`/repos/${fullName}`, client);
   const githubRepoId: number = repo.id;
   const ref = branch || repo.default_branch || "main";
 
-  const tree = await ghJson(
-    `https://api.github.com/repos/${fullName}/git/trees/${encodeURIComponent(ref!)}?recursive=1`
+  const tree = await apiGet(
+    `/repos/${fullName}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
+    client
   );
   const commitSha: string | null = tree.sha ?? null;
 
@@ -85,19 +146,9 @@ export async function fetchRepoFiles(fullName: string, branch?: string): Promise
   const selected = blobs.slice(0, MAX_FILES);
 
   const files = await pool(selected, CONCURRENCY, async (node: any): Promise<ScanFile | null> => {
-    const rawUrl = `https://raw.githubusercontent.com/${fullName}/${encodeURIComponent(ref!)}/${node.path
-      .split("/")
-      .map(encodeURIComponent)
-      .join("/")}`;
-    try {
-      const res = await fetch(rawUrl, { headers: ghHeaders(), cache: "no-store" });
-      if (!res.ok) return null;
-      const content = await res.text();
-      if (content.length > MAX_FILE_BYTES) return null;
-      return { path: node.path, content };
-    } catch {
-      return null;
-    }
+    const content = await getBlobContent(fullName, node.sha, client);
+    if (content === null) return null;
+    return { path: node.path, content };
   });
 
   return {

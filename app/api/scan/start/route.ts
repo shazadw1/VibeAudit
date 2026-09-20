@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { rateLimit, clientKey, tooManyRequests } from "@/lib/rate-limit";
 import { runScanEngine } from "@/lib/scan/engine";
 import { fetchRepoFiles, parseRepoInput } from "@/lib/github/fetch-repo";
+import { getInstallationOctokit } from "@/lib/github/app";
 
 export const maxDuration = 60; // allow time to fetch + scan a repo
 
@@ -62,9 +63,36 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Could not parse repository. Use owner/repo." }, { status: 400 });
   }
 
+  // Verify the repo belongs to the requesting user's GitHub App installation.
+  const { data: repoRow } = await supabase
+    .from("repos")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("full_name", parsedRepo.fullName)
+    .single();
+
+  if (!repoRow) {
+    return NextResponse.json(
+      { error: "Repository is not connected to your GitHub App installation" },
+      { status: 404 }
+    );
+  }
+
+  const installationClient = await getInstallationOctokit(repoRow.installation_id);
+  if (!installationClient) {
+    return NextResponse.json(
+      { error: "GitHub App is not configured or the installation is unavailable" },
+      { status: 503 }
+    );
+  }
+
   let fetched;
   try {
-    fetched = await fetchRepoFiles(parsedRepo.fullName, parsed.data.branch || parsedRepo.branch);
+    fetched = await fetchRepoFiles(
+      parsedRepo.fullName,
+      parsed.data.branch || parsedRepo.branch,
+      installationClient
+    );
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || "Failed to fetch repository" }, { status: 502 });
   }
@@ -79,42 +107,33 @@ export async function POST(request: Request) {
   // env prevents it, we still return the live findings below.
   let scanId: string | null = null;
   try {
-    const { data: repoRow } = await supabase
-      .from("repos")
-      .upsert(
-        {
-          user_id: user.id,
-          github_repo_id: fetched.githubRepoId,
-          full_name: fetched.fullName,
-          default_branch: fetched.branch,
-          installation_id: 0,
-        },
-        { onConflict: "user_id,github_repo_id" }
-      )
+    // Update default_branch on the repo row if it changed.
+    if (repoRow.default_branch !== fetched.branch) {
+      await supabase
+        .from("repos")
+        .update({ default_branch: fetched.branch })
+        .eq("id", repoRow.id);
+    }
+
+    const { data: scanRow } = await supabase
+      .from("scans")
+      .insert({
+        repo_id: repoRow.id,
+        user_id: user.id,
+        status: "done",
+        score: result.score,
+        commit_sha: fetched.commitSha,
+        finished_at: new Date().toISOString(),
+      })
       .select()
       .single();
 
-    if (repoRow) {
-      const { data: scanRow } = await supabase
-        .from("scans")
-        .insert({
-          repo_id: repoRow.id,
-          user_id: user.id,
-          status: "done",
-          score: result.score,
-          commit_sha: fetched.commitSha,
-          finished_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
-
-      if (scanRow) {
-        scanId = scanRow.id;
-        if (result.findings.length > 0) {
-          await supabase
-            .from("findings")
-            .insert(result.findings.map((f) => ({ ...f, scan_id: scanRow.id })));
-        }
+    if (scanRow) {
+      scanId = scanRow.id;
+      if (result.findings.length > 0) {
+        await supabase
+          .from("findings")
+          .insert(result.findings.map((f) => ({ ...f, scan_id: scanRow.id })));
       }
     }
   } catch (err) {

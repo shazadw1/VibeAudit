@@ -135,7 +135,7 @@ export function RealScanClient() {
         </button>
         <p className="text-[11px] text-slate-500 font-medium">
           Tip: try your own repo, e.g. <span className="font-mono">joocn619/VibeAudit</span>. Private repos
-          need a <span className="font-mono">GITHUB_TOKEN</span> set on the server.
+          require connecting the GitHub App and scanning from the dashboard.
         </p>
       </form>
 

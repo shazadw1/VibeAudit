@@ -8,8 +8,10 @@ export const maxDuration = 60;
 
 // Public, no-auth real-scan endpoint. Lives OUTSIDE /api so it is not caught by
 // the /api -> Railway proxy on this project, and needs no Supabase session, so
-// it works even before auth/DB is fully configured. It only reads public repos
-// and returns analysis (no persistence, no user data), gated by rate limiting.
+// it works even before auth/DB is fully configured. It reaches only public repos
+// (no token is ever sent) and returns analysis (no persistence, no user data),
+// gated by rate limiting. Private repos require connecting the GitHub App and
+// scanning from the dashboard.
 const bodySchema = z.object({
   repo: z.string().min(3).max(200),
   branch: z.string().min(1).max(200).optional(),
@@ -31,7 +33,7 @@ export async function POST(request: Request) {
 
   let fetched;
   try {
-    fetched = await fetchRepoFiles(parsedRepo.fullName, parsed.data.branch || parsedRepo.branch);
+    fetched = await fetchRepoFiles(parsedRepo.fullName, parsed.data.branch || parsedRepo.branch, { anonymous: true });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || "Failed to fetch repository" }, { status: 502 });
   }
