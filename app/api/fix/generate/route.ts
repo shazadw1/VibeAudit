@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { rateLimit, clientKey, tooManyRequests } from "@/lib/rate-limit";
+import { checkLimit, recordUsage } from "@/lib/entitlements";
 
 const bodySchema = z.object({
   findingId: z.string().min(1),
@@ -25,6 +26,20 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("plan,current_period_start,current_period_end,created_at")
+    .eq("id", user.id)
+    .single();
+  if (!profile) {
+    return NextResponse.json({ error: "Profile not found" }, { status: 404 });
+  }
+
+  const fixLimitCheck = await checkLimit(supabase, user.id, "fix_attempt", profile);
+  if (!fixLimitCheck.ok) return fixLimitCheck.response;
+
+  await recordUsage(supabase, user.id, "fix_attempt", parsed.data.findingId);
 
   // NOTE: Autonomous AI patch generation + GitHub PR creation is not yet
   // implemented. This is a SIMULATED response, explicitly flagged, so it is

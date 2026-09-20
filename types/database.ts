@@ -17,6 +17,8 @@ export interface Database {
           stripe_customer_id: string | null
           stripe_subscription_id: string | null
           onboarding_completed: boolean
+          current_period_start: string | null
+          current_period_end: string | null
           created_at: string
           updated_at: string
         }
@@ -27,6 +29,8 @@ export interface Database {
           stripe_customer_id?: string | null
           stripe_subscription_id?: string | null
           onboarding_completed?: boolean
+          current_period_start?: string | null
+          current_period_end?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -37,6 +41,8 @@ export interface Database {
           stripe_customer_id?: string | null
           stripe_subscription_id?: string | null
           onboarding_completed?: boolean
+          current_period_start?: string | null
+          current_period_end?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -168,6 +174,69 @@ export interface Database {
           pr_url?: string
           status?: 'open' | 'merged' | 'closed'
           created_at?: string
+        }
+        Relationships: []
+      }
+      plan_limits: {
+        Row: {
+          plan: string
+          scans_per_period: number | null
+          repos: number | null
+          monitored_repos: number | null
+          fix_attempts_per_period: number | null
+          certificates_per_period: number | null
+          exports_per_period: number | null
+          api_requests_per_day: number | null
+          team_seats: number | null
+          updated_at: string
+        }
+        Insert: {
+          plan: string
+          scans_per_period?: number | null
+          repos?: number | null
+          monitored_repos?: number | null
+          fix_attempts_per_period?: number | null
+          certificates_per_period?: number | null
+          exports_per_period?: number | null
+          api_requests_per_day?: number | null
+          team_seats?: number | null
+          updated_at?: string
+        }
+        Update: {
+          plan?: string
+          scans_per_period?: number | null
+          repos?: number | null
+          monitored_repos?: number | null
+          fix_attempts_per_period?: number | null
+          certificates_per_period?: number | null
+          exports_per_period?: number | null
+          api_requests_per_day?: number | null
+          team_seats?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      usage_events: {
+        Row: {
+          id: string
+          user_id: string
+          kind: 'scan' | 'repo' | 'monitored_repo' | 'fix_attempt' | 'certificate' | 'export' | 'api_request' | 'team_seat'
+          occurred_at: string
+          ref_id: string | null
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          kind: 'scan' | 'repo' | 'monitored_repo' | 'fix_attempt' | 'certificate' | 'export' | 'api_request' | 'team_seat'
+          occurred_at?: string
+          ref_id?: string | null
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          kind?: 'scan' | 'repo' | 'monitored_repo' | 'fix_attempt' | 'certificate' | 'export' | 'api_request' | 'team_seat'
+          occurred_at?: string
+          ref_id?: string | null
         }
         Relationships: []
       }

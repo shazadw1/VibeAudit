@@ -6,7 +6,9 @@ const mocks = vi.hoisted(() => {
   const mockGetInstallationOctokit = vi.fn();
   const mockFetchRepoFiles = vi.fn();
   const mockRunScanEngine = vi.fn();
-  return { mockGetUser, mockFrom, mockGetInstallationOctokit, mockFetchRepoFiles, mockRunScanEngine };
+  const mockCheckLimit = vi.fn();
+  const mockRecordUsage = vi.fn();
+  return { mockGetUser, mockFrom, mockGetInstallationOctokit, mockFetchRepoFiles, mockRunScanEngine, mockCheckLimit, mockRecordUsage };
 });
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -36,6 +38,11 @@ vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(() => ({ ok: true })),
   clientKey: vi.fn(() => "key"),
   tooManyRequests: vi.fn(),
+}));
+
+vi.mock("@/lib/entitlements", () => ({
+  checkLimit: mocks.mockCheckLimit,
+  recordUsage: mocks.mockRecordUsage,
 }));
 
 import { POST } from "@/app/api/scan/start/route";
@@ -72,17 +79,35 @@ function makeRequest(body: object) {
 }
 
 describe("POST /api/scan/start", () => {
+  const MOCK_PROFILE = {
+    plan: 'free',
+    current_period_start: null,
+    current_period_end: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.mockGetUser.mockResolvedValue({ data: { user: MOCK_USER } });
     mocks.mockRunScanEngine.mockReturnValue(MOCK_SCAN_RESULT);
+    mocks.mockCheckLimit.mockResolvedValue({ ok: true });
+    mocks.mockRecordUsage.mockResolvedValue(undefined);
   });
 
   it("returns 404 when repo is not in user's repos table", async () => {
-    mocks.mockFrom.mockReturnValue({
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      single: vi.fn().mockResolvedValue({ data: null, error: { message: "not found" } }),
+    mocks.mockFrom.mockImplementation((table: string) => {
+      if (table === "profiles") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: MOCK_PROFILE }),
+        };
+      }
+      return {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({ data: null, error: { message: "not found" } }),
+      };
     });
 
     const res = await POST(makeRequest({ repo: "owner/repo" }));
@@ -95,10 +120,19 @@ describe("POST /api/scan/start", () => {
   });
 
   it("returns 503 when getInstallationOctokit returns null", async () => {
-    mocks.mockFrom.mockReturnValue({
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      single: vi.fn().mockResolvedValue({ data: MOCK_REPO_ROW, error: null }),
+    mocks.mockFrom.mockImplementation((table: string) => {
+      if (table === "profiles") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: MOCK_PROFILE }),
+        };
+      }
+      return {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({ data: MOCK_REPO_ROW, error: null }),
+      };
     });
     mocks.mockGetInstallationOctokit.mockResolvedValue(null);
 
@@ -118,6 +152,13 @@ describe("POST /api/scan/start", () => {
     };
 
     mocks.mockFrom.mockImplementation((table: string) => {
+      if (table === "profiles") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: MOCK_PROFILE }),
+        };
+      }
       if (table === "repos") {
         return {
           select: vi.fn().mockReturnThis(),
@@ -144,6 +185,13 @@ describe("POST /api/scan/start", () => {
   it("never writes installation_id: 0", async () => {
     const upsertFn = vi.fn();
     mocks.mockFrom.mockImplementation((table: string) => {
+      if (table === "profiles") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: MOCK_PROFILE }),
+        };
+      }
       if (table === "repos") {
         return {
           select: vi.fn().mockReturnThis(),
@@ -174,5 +222,46 @@ describe("POST /api/scan/start", () => {
         expect(arg.installation_id).not.toBe(0);
       }
     }
+  });
+
+  it("returns 402 when free user is at scan limit (no fetch/GitHub calls)", async () => {
+    mocks.mockFrom.mockImplementation((table: string) => {
+      if (table === "profiles") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: MOCK_PROFILE }),
+        };
+      }
+      return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), single: vi.fn().mockResolvedValue({ data: null }) };
+    });
+
+    const limitResponse = Response.json(
+      { error: "Plan limit reached", code: "plan_limit_exceeded", limit: { kind: "scan", used: 1, max: 1, period_end: new Date().toISOString() }, upgrade: "/settings/billing" },
+      { status: 402 }
+    );
+    mocks.mockCheckLimit.mockResolvedValue({ ok: false, response: limitResponse });
+
+    const res = await POST(makeRequest({ repo: "owner/repo" }));
+    expect(res.status).toBe(402);
+    expect(mocks.mockFetchRepoFiles).not.toHaveBeenCalled();
+    expect(mocks.mockGetInstallationOctokit).not.toHaveBeenCalled();
+  });
+
+  it("records usage event after successful file upload", async () => {
+    mocks.mockFrom.mockImplementation((table: string) => {
+      if (table === "profiles") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: MOCK_PROFILE }),
+        };
+      }
+      return { insert: vi.fn().mockResolvedValue({}) };
+    });
+
+    const res = await POST(makeRequest({ files: [{ path: "a.ts", content: "const x = 1" }] }));
+    expect(res.status).toBe(200);
+    expect(mocks.mockRecordUsage).toHaveBeenCalledWith(expect.anything(), MOCK_USER.id, "scan", "upload");
   });
 });

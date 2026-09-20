@@ -5,6 +5,7 @@ import { rateLimit, clientKey, tooManyRequests } from "@/lib/rate-limit";
 import { runScanEngine } from "@/lib/scan/engine";
 import { fetchRepoFiles, parseRepoInput } from "@/lib/github/fetch-repo";
 import { getInstallationOctokit } from "@/lib/github/app";
+import { checkLimit, recordUsage } from "@/lib/entitlements";
 
 export const maxDuration = 60; // allow time to fetch + scan a repo
 
@@ -38,9 +39,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
+  // Fetch profile for plan limit checks
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("plan,current_period_start,current_period_end,created_at")
+    .eq("id", user.id)
+    .single();
+  if (!profile) {
+    return NextResponse.json({ error: "Profile not found" }, { status: 404 });
+  }
+
+  const scanLimitCheck = await checkLimit(supabase, user.id, "scan", profile);
+  if (!scanLimitCheck.ok) return scanLimitCheck.response;
+
   // ---- Path 1: direct file contents (upload) ------------------------------
   if (parsed.data.files && parsed.data.files.length > 0) {
     const result = runScanEngine(parsed.data.files);
+    await recordUsage(supabase, user.id, "scan", "upload");
     return NextResponse.json({
       status: result.status,
       score: result.score,
@@ -139,6 +154,8 @@ export async function POST(request: Request) {
   } catch (err) {
     console.error("[scan/start] persistence failed (returning live results):", err);
   }
+
+  await recordUsage(supabase, user.id, "scan", scanId ?? "repo");
 
   return NextResponse.json({
     status: result.status,

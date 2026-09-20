@@ -40,9 +40,14 @@ export async function POST(request: Request) {
 
         if (userId && customerId) {
           let plan: "free" | "pro" | "agency" = "pro";
+          let periodUpdate: Record<string, string> = {};
           if (subscriptionId) {
             const sub = await stripe.subscriptions.retrieve(subscriptionId);
             plan = planIdFromPriceId(sub.items.data[0]?.price.id);
+            periodUpdate = {
+              current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
+              current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+            };
           }
           await supabase
             .from("profiles")
@@ -50,6 +55,7 @@ export async function POST(request: Request) {
               stripe_customer_id: customerId,
               stripe_subscription_id: subscriptionId ?? null,
               plan,
+              ...periodUpdate,
             })
             .eq("id", userId);
         }
@@ -64,7 +70,12 @@ export async function POST(request: Request) {
         const plan = active ? planIdFromPriceId(sub.items.data[0]?.price.id) : "free";
         await supabase
           .from("profiles")
-          .update({ plan, stripe_subscription_id: sub.id })
+          .update({
+            plan,
+            stripe_subscription_id: sub.id,
+            current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
+            current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+          })
           .eq("stripe_customer_id", customerId);
         break;
       }
@@ -74,7 +85,7 @@ export async function POST(request: Request) {
         const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
         await supabase
           .from("profiles")
-          .update({ plan: "free", stripe_subscription_id: null })
+          .update({ plan: "free", stripe_subscription_id: null, current_period_start: null, current_period_end: null })
           .eq("stripe_customer_id", customerId);
         break;
       }

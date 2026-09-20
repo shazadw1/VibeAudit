@@ -12,6 +12,8 @@ create table if not exists public.profiles (
   stripe_customer_id text,
   stripe_subscription_id text,
   onboarding_completed boolean not null default false,
+  current_period_start timestamptz,
+  current_period_end timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -72,6 +74,38 @@ create table if not exists public.monitoring_config (
   alert_discord_webhook text
 );
 
+-- plan_limits table
+create table if not exists public.plan_limits (
+  plan text primary key,
+  scans_per_period integer,
+  repos integer,
+  monitored_repos integer,
+  fix_attempts_per_period integer,
+  certificates_per_period integer,
+  exports_per_period integer,
+  api_requests_per_day integer,
+  team_seats integer,
+  updated_at timestamptz not null default now()
+);
+
+insert into public.plan_limits (plan, scans_per_period, repos, monitored_repos, fix_attempts_per_period, certificates_per_period, exports_per_period, api_requests_per_day, team_seats)
+values
+  ('free',   1,    1,    0,    0,   0,    0,    0,    1),
+  ('pro',    null, null, null, 50,  null, null, 1000, 1),
+  ('agency', null, 15,   15,   200, null, null, 5000, 5)
+on conflict (plan) do nothing;
+
+-- usage_events table
+create table if not exists public.usage_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  kind text not null check (kind in ('scan','repo','monitored_repo','fix_attempt','certificate','export','api_request','team_seat')),
+  occurred_at timestamptz not null default now(),
+  ref_id text
+);
+
+create index if not exists idx_usage_events_user_kind_time on public.usage_events(user_id, kind, occurred_at);
+
 -- 8. Create Performance Indexes
 create index if not exists idx_repos_user_id on public.repos(user_id);
 create index if not exists idx_scans_repo_id on public.scans(repo_id);
@@ -128,6 +162,8 @@ alter table public.scans enable row level security;
 alter table public.findings enable row level security;
 alter table public.fix_prs enable row level security;
 alter table public.monitoring_config enable row level security;
+alter table public.plan_limits enable row level security;
+alter table public.usage_events enable row level security;
 
 -- 11. RLS Policies
 -- Profiles: Users can view and update their own profile
@@ -234,3 +270,14 @@ create policy "Users can update monitoring_config for own repos" on public.monit
         and repos.user_id = auth.uid()
     )
   );
+
+-- Plan Limits: Authenticated users can read; no client writes
+create policy "Authenticated users can read plan_limits" on public.plan_limits
+  for select using (auth.role() = 'authenticated');
+
+-- Usage Events: Users can select and insert own rows only
+create policy "Users can select own usage_events" on public.usage_events
+  for select using (auth.uid() = user_id);
+
+create policy "Users can insert own usage_events" on public.usage_events
+  for insert with check (auth.uid() = user_id);
