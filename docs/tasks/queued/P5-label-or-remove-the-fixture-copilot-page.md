@@ -2,8 +2,8 @@
 id: P5
 title: Label or remove the fixture Copilot page's fabricated claims
 lane: high-risk
-status: draft
-approval: pending
+status: queued
+approval: approved
 plan_item: 5
 plan_status_owner: runner
 source: docs/plan.md#5
