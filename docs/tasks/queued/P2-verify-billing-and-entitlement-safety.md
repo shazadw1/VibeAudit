@@ -2,8 +2,8 @@
 id: P2
 title: Verify billing and entitlement safety
 lane: high-risk
-status: draft
-approval: pending
+status: queued
+approval: approved
 plan_item: 2
 plan_status_owner: runner
 source: docs/plan.md#2
