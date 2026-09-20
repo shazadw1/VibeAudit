@@ -27,7 +27,7 @@ The main launch risk is product honesty: the headline "Autonomous PR Fix Engine"
 - **What:** `components/marketing/landing-client.tsx` includes a customer quote claiming the autonomous PR generator opened GitHub PRs. Remove/rewrite it while the backend returns `not_implemented`.
 
 ### 2. Verify billing and entitlement safety
-- **Status:** Not Started
+- **Status:** Needs Verification (2026-09-20, factory runner; see P2-verify-billing-and-entitlement-safety.md)
 - **Priority:** Critical
 - **What:** Verify Stripe price resolution, checkout, customer portal, subscription updates, cancelation, failed payment states, webhook signature validation, webhook idempotency, and entitlement enforcement.
 - **Launch check:** Upgrades modify one existing subscription and cannot create duplicate active subscriptions.

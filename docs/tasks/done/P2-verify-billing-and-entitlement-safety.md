@@ -2,13 +2,14 @@
 id: P2
 title: Verify billing and entitlement safety
 lane: high-risk
-status: queued
+status: needs-verification
 approval: approved
 plan_item: 2
 plan_status_owner: runner
 source: docs/plan.md#2
 created_at: 2026-09-20T02:40:25Z
 runner_eligible: false
+runner_started_at: 2026-09-20T03:22:52Z
 ---
 
 ## Problem
@@ -461,3 +462,11 @@ Assumptions recorded, not decisions: proration uses Stripe's `create_prorations`
 plan-change downgrade timing (as opposed to failed-payment timing) stays Stripe's default and
 is left to plan item 3 or a follow-up; the annual prices must exist in Stripe test mode before
 the live check can run. No remaining open questions.
+
+## Execution Note (controller, 2026-09-20)
+
+Shipped as commit `cbeef1e`. All 83 tests pass; tsc and lint clean.
+
+Automated checks done: duplicate-subscription bug fixed (checkout routes to `subscriptions.update` for active subscribers); unknown price returns `null` and skips plan write; self-upgrade policy blocked at column-privilege level (`revoke update` on billing columns from `authenticated`); `effectivePlan` wired into `checkLimit`; webhook idempotency via `stripe_events`; `invoice.payment_failed` and `subscription.paused` handlers; billing page reads from DB with no hardcoded array.
+
+**Needs-verification reason:** the live Stripe test-mode check (free→Pro checkout, Pro→Agency upgrade confirming one subscription, `stripe trigger invoice.payment_failed`, policy test against a scratch Supabase project) requires Stripe test keys + `stripe listen` and a Supabase project not available in this environment. Checklist lines 12, 35, 38, 73, 152, 155-158 to be ticked by the runner after the live check passes.
