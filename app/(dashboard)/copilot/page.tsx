@@ -2,8 +2,8 @@ import React from "react";
 import { CopilotClient } from "@/components/dashboard/copilot-client";
 
 export const metadata = {
-  title: "VibeAudit Copilot — Neural AI Security Assistant & Threat Hunter",
-  description: "Interactive AI security chat, automated threat hunting, AST vulnerability analysis, and IDE/CLI integration guides.",
+  title: "VibeAudit Copilot (Preview)",
+  description: "AI security assistant — demo preview",
 };
 
 export default function CopilotPage() {
