@@ -45,7 +45,7 @@ The main launch risk is product honesty: the headline "Autonomous PR Fix Engine"
 - **Launch check:** User A cannot trigger a scan of a repo not connected to their own installation, via either route.
 
 ### 5. Label or remove the fixture Copilot page's fabricated claims
-- **Status:** Not Started
+- **Status:** Done (2026-09-20, factory runner; see P5-label-or-remove-the-fixture-copilot-page.md)
 - **Priority:** Critical
 - **What:** `components/dashboard/copilot-client.tsx` (502 lines, fixture-only) returns canned replies claiming an "Autonomous PR #117" was opened and that analysis ran "in volatile AWS Nitro memory". Same honesty problem as the testimonial in item 1. Label the page demo or remove the fabricated content. Note: [Roadmap.md](../Roadmap.md) §4 says no Copilot feature was found; this page is it.
 

@@ -2,13 +2,14 @@
 id: P5
 title: Label or remove the fixture Copilot page's fabricated claims
 lane: high-risk
-status: queued
+status: done
 approval: approved
 plan_item: 5
 plan_status_owner: runner
 source: docs/plan.md#5
 created_at: 2026-09-20T01:25:14Z
 runner_eligible: false
+runner_started_at: 2026-09-20T01:53:18Z
 ---
 
 ## Problem
@@ -207,3 +208,12 @@ reviewer; a deviation is a decision outside the brief and must stop for the user
 The codegraph index was stale when drafted (warning above); all context was confirmed by
 direct file reads on 2026-09-20. Re-indexing is optional for this item and remains the
 user's call. No remaining open questions.
+
+## Execution Note (2026-09-20)
+Implemented in commit `33fa791`. All acceptance criteria met: forbidden-phrase grep clean,
+demo banner with exact required text at top of component (non-dismissible), Demo badge on
+title, INITIAL_MESSAGES and all three presets rewritten, default reply labelled demo,
+alert() replaced with benign demo string (with /fixes redirect kept), Zero-Retention card
+deleted, page metadata updated to "VibeAudit Copilot (Preview)". New text-level guard test
+at `components/dashboard/__tests__/copilot-client-claims.test.ts` — 21 assertions, all
+passing. Spec compliance and code quality reviews both PASS. verify.sh green on HEAD.
