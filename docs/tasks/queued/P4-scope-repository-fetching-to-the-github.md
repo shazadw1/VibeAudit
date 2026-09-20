@@ -2,7 +2,7 @@
 id: P4
 title: Scope repository fetching to the GitHub App installation
 lane: high-risk
-status: failed
+status: queued
 approval: approved
 plan_item: 4
 plan_status_owner: runner

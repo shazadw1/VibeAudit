@@ -39,7 +39,7 @@ The main launch risk is product honesty: the headline "Autonomous PR Fix Engine"
 - **Launch check:** Admin can change commercial policy without code edits or redeploying.
 
 ### 4. Scope repository fetching to the GitHub App installation
-- **Status:** In Progress (failed 2026-09-20, factory runner; see P4-scope-repository-fetching-to-the-github.md)
+- **Status:** In Progress (requeued 2026-09-20 after fixing a host claude CLI auth misconfiguration unrelated to this task; see P4-scope-repository-fetching-to-the-github.md)
 - **Priority:** Critical
 - **What:** `lib/github/fetch-repo.ts` authenticates with a single operator token, not the installation Octokit; any logged-in user can scan any repo that token can read, and rows are stored with `installation_id: 0`. Resolve repos to the requester's `repos` row, fetch through the installation token, and restrict `app/svc/scan` to unauthenticated public reads. See [implementation_plan.md §0.1](implementation_plan.md#part-0--prerequisites-surfaced-in-review).
 - **Launch check:** User A cannot trigger a scan of a repo not connected to their own installation, via either route.
