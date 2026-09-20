@@ -2,13 +2,14 @@
 id: R1
 title: Runner smoke test for standard-lane factory execution
 lane: standard
-status: queued
+status: done
 approval: approved
 plan_item: null
 plan_status_owner: runner
 source: factory
 created_at: 2026-09-19T23:05:00Z
 runner_eligible: false
+runner_started_at: 2026-09-20T00:02:13Z
 ---
 
 ## Problem
@@ -33,3 +34,6 @@ No runtime code changes. No factory changes. No docs/plan.md update. No GitHub, 
 
 ## Verification
 Run targeted vitest first, then factory verify.
+
+## Execution Note
+Added one test `"ignores generated build output under .next/"` to the existing `describe("engine", ...)` block in `lib/scan/__tests__/engine.test.ts`. The test feeds `.next/` files containing synthetic credential and XSS patterns and asserts `filesScanned` and `findings` are unchanged versus the clean baseline. Confirmed `.next/` was already handled by `isScannable` in `engine.ts`; `dist/` is not ignored so the test was scoped to `.next/` only, matching the brief's "prefer already-supported ignored path" guidance. Vitest: 14/14 pass. verify.sh: green. Shipped as commit `4d78a2f`.
