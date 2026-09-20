@@ -7,6 +7,7 @@ set -u
 set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
+[ -f "$SCRIPT_DIR/config.sh" ] && . "$SCRIPT_DIR/config.sh"
 cd "$SCRIPT_DIR/../.."
 QUICK=0; [ "${1:-}" = "--quick" ] && QUICK=1
 fail=0; warn=0
@@ -16,14 +17,34 @@ warnf(){ printf '  [warn] %s\n' "$1"; warn=1; }
 
 echo "== Factory preflight =="
 
+echo "-- factory kit"
+kit_version="${FACTORY_KIT_VERSION:-}"
+if [ -r scripts/factory/VERSION ]; then
+  file_version=$(head -1 scripts/factory/VERSION 2>/dev/null)
+else
+  file_version=""
+fi
+if [ -n "$kit_version" ] || [ -n "$file_version" ]; then
+  ok "kit version: ${kit_version:-unknown} (scripts/factory/VERSION: ${file_version:-missing})"
+  if [ -n "$kit_version" ] && [ -n "$file_version" ] && [ "$kit_version" != "$file_version" ]; then
+    warnf "config.sh FACTORY_KIT_VERSION ($kit_version) != scripts/factory/VERSION ($file_version) -> re-run install-factory.py --update"
+  fi
+else
+  warnf "kit version unknown (no FACTORY_KIT_VERSION in config.sh, no scripts/factory/VERSION) -> predates version stamping; re-run install-factory.py --update"
+fi
+
 echo "-- toolchain"
 for t in node npm git; do command -v "$t" >/dev/null && ok "$t: $(command -v $t)" || bad "$t missing"; done
 command -v jq >/dev/null && ok "jq present" || warnf "jq missing (hooks fall back to grep)"
-[ -d node_modules ] && ok "node_modules installed" || bad "node_modules missing -> run: npm ci"
-[ -x node_modules/.bin/vitest ] && ok "vitest installed" || bad "vitest missing -> run: npm i -D vitest"
+node_modules_dir="${FACTORY_NODE_MODULES_DIR:-node_modules}"
+[ -d "$node_modules_dir" ] && ok "$node_modules_dir installed" || bad "$node_modules_dir missing -> run: npm ci"
+ok "verification commands configured"
+printf '       typecheck: %s\n' "${FACTORY_TYPECHECK_CMD:-npx tsc --noEmit}"
+printf '       lint:      %s\n' "${FACTORY_LINT_CMD:-npx next lint --max-warnings=0}"
+printf '       test:      %s\n' "${FACTORY_TEST_CMD:-npx vitest run}"
 
 echo "-- source-of-truth docs readable"
-for f in Roadmap.md FINDINGS.md docs/plan.md docs/checklist.md docs/implementation_plan.md docs/competitor_research.md docs/coding_factory_fit.md CLAUDE.md; do
+for f in "${FACTORY_REQUIRED_DOCS[@]}"; do
   if [ -r "$f" ]; then
     [ -w "$f" ] && ok "$f (rw)" || warnf "$f readable but not writable (owner: $(stat -c %U "$f"))"
   else
@@ -41,7 +62,7 @@ done
 
 echo "-- git"
 if toplevel=$(g rev-parse --show-toplevel); then
-  g check-ignore -q .claude/settings.json
+  git -c "safe.directory=$toplevel" check-ignore -q .claude/settings.json
   ignored_rc=$?
   if [ "$ignored_rc" -eq 0 ]; then
     bad ".claude/settings.json is gitignored (fix .gitignore)"
@@ -97,7 +118,7 @@ if [ $QUICK -eq 0 ]; then
   echo "-- verification baseline"
   verify_log=.factory/verify.log
   if scripts/factory/verify.sh --full >"$verify_log" 2>&1; then
-    ok "verify.sh green (tsc, lint, tests)"
+    ok "verify.sh green (typecheck, lint, tests)"
   elif [ -s "$verify_log" ]; then
     bad "verify.sh failed -> see $verify_log"
   else

@@ -78,15 +78,16 @@ context, and writes it to `docs/tasks/drafts/`. That is the entire scope.
    - Writes `## Approval Notes` warnings for an unavailable or stale codegraph index too.
    - Writes the frontmatter with `approval: pending`, `plan_item: <item>`,
      `plan_status_owner: runner`, `runner_eligible: false`, and prints the draft path.
-3. **Read `Roadmap.md`, `FINDINGS.md`, `docs/implementation_plan.md`, and
-   `docs/checklist.md`** as planning inputs for the sections below, and cite them by
-   heading — do not restructure them, and do not treat them as a second source of truth for
-   task status (`docs/plan.md` is the only place status lives).
+3. **Read `docs/Roadmap.md`, `docs/FINDINGS.md`, and `docs/checklist.md`** as planning
+   inputs for the sections below. If `docs/implementation_plan.md` exists, read it as
+   optional supporting context. Cite the files by heading, do not restructure them, and do
+   not treat them as a second source of truth for task status (`docs/plan.md` is the only
+   place status lives).
 4. **Mandatory follow-up queries.** The plan item's own backticked terms are rarely enough —
    step 2's bare script output is a starting point, not the finished section. This step is
    not optional and is not skipped just because step 2's output already looks substantial:
-   1. (a) From the `docs/implementation_plan.md` section(s) and the `docs/checklist.md`
-      lines the plan item cites (read in step 3), extract **every** backtick-quoted path,
+   1. (a) From the `docs/checklist.md` lines the plan item cites and, when present,
+      `docs/implementation_plan.md` section(s), extract **every** backtick-quoted path,
       identifier, environment variable, and table name. Re-run
       `scripts/factory/task-master.sh <item> --lane <lane> --force --terms <comma list>`
       with all of them (plus anything from the plan item's own text) as the `--terms` list,
@@ -102,7 +103,7 @@ context, and writes it to `docs/tasks/drafts/`. That is the entire scope.
       it, e.g. `` - `lib/github/app.ts`, `getInstallationOctokit` — found by `codegraph-query.py search getInstallationOctokit` ``.
    3. (c) Stop condition: `## Codegraph Context` (script output plus `### Follow-up
       queries`) must name every backtick-quoted path from the cited
-      `docs/implementation_plan.md` section(s). If the index genuinely does not contain
+      `docs/implementation_plan.md` section(s), when that file exists. If the index genuinely does not contain
       one of them (a `search` for it returns nothing, checked via `--json` or by eye), list
       that path under `### Follow-up queries` as "not found in the index" instead of
       silently omitting it. Do not consider this step done while any cited path is simply
@@ -116,8 +117,8 @@ context, and writes it to `docs/tasks/drafts/`. That is the entire scope.
      subsection; you may add further prose under the script's output too (e.g. naming a
      symbol, env var, or literal string the codegraph schema doesn't capture as a node), but
      never delete or edit a line the script wrote.
-   - `## In Scope` / `## Out of Scope` — cite `docs/implementation_plan.md` and
-     `docs/checklist.md` items by heading.
+   - `## In Scope` / `## Out of Scope` — cite `docs/checklist.md` and any relevant optional
+     `docs/implementation_plan.md` items by heading.
    - `## Implementation Tasks` — a checkbox list; name files from `## Codegraph Context` in
      each item.
    - `## Acceptance Criteria` — testable statements.

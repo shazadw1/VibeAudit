@@ -12,6 +12,7 @@ set -u
 set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
+[ -f "$SCRIPT_DIR/config.sh" ] && . "$SCRIPT_DIR/config.sh"
 cd "$SCRIPT_DIR/../.."
 
 if_stale=0; full=0
@@ -70,9 +71,9 @@ if ! printf '%s' "$head" | grep -Eq '^[0-9a-f]{40}$'; then
 fi
 
 rc=0
-echo "== tsc --noEmit";  npx tsc --noEmit               || rc=1
-echo "== next lint";     npx next lint --max-warnings=0 || rc=1
-echo "== vitest";        npx vitest run                 || rc=1
+echo "== typecheck"; eval "${FACTORY_TYPECHECK_CMD:-npx tsc --noEmit}" || rc=1
+echo "== lint";      eval "${FACTORY_LINT_CMD:-npx next lint --max-warnings=0}" || rc=1
+echo "== test";      eval "${FACTORY_TEST_CMD:-npx vitest run}" || rc=1
 
 fingerprint=$(worktree_fingerprint) || fingerprint=""
 if [ -z "$fingerprint" ]; then

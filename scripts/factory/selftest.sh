@@ -5,7 +5,15 @@ set -u
 set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
+[ -f "$SCRIPT_DIR/config.sh" ] && . "$SCRIPT_DIR/config.sh"
 cd "$SCRIPT_DIR/../.."
+
+# Selftest exercises factory mechanics in tiny scratch repos. Keep those
+# scratch verify runs independent of the target repo's real test harness,
+# which may rely on repo-local helper scripts not present in the scratch copy.
+export FACTORY_TYPECHECK_CMD=true
+export FACTORY_LINT_CMD=true
+export FACTORY_TEST_CMD=true
 
 pass=0; fail=0; skipped=0
 ok()   { printf '[PASS] %s\n' "$1"; pass=$((pass + 1)); }
@@ -213,7 +221,7 @@ if [ $rc -eq 0 ] && [ -z "$out" ]; then ok "gate allows a non-commit command wit
 # restore into the trap once that backup is confirmed on disk -- if the
 # backup fails, abort before ever touching the real stamp (fix round 1,
 # finding 2).
-tmp_file="lib/__selftest_tmp.ts"
+tmp_file="__selftest_tmp.ts"
 stamp_backup=""
 stamp_backup_check=""
 # Fallback safety net only: the normal path restores and verifies the stamp
@@ -261,8 +269,8 @@ write_stamp() {
 }
 
 printf '// selftest tmp file, staged then unstaged by selftest.sh\n' > "$tmp_file"
-if git add "$tmp_file"; then
-  real_head=$(git rev-parse HEAD)
+if g add "$tmp_file"; then
+  real_head=$(g rev-parse HEAD)
   real_fp=$(worktree_fingerprint)
   fake_head=$(printf '%040d' 0)
   fake_fp=$(printf '%064d' 0)
@@ -287,7 +295,7 @@ fi
 # tmp_file is only needed above; drop it now so it can't leak into the -a
 # case below and make "everything staged is .md" trivially false for the
 # wrong reason.
-git rm --cached -q "$tmp_file" >/dev/null 2>&1
+g rm --cached -q "$tmp_file" >/dev/null 2>&1
 rm -f "$tmp_file"
 
 # -- worktree_fingerprint with no untracked non-doc files (round 2 fix):
@@ -613,7 +621,7 @@ then
   done
 
   echo 'x' > "$ship_scratch/app.ts"
-  out=$(cd "$ship_scratch" && PATH="$ship_scratch/fakebin:$PATH" scripts/factory/ship.sh -m "should not land" 2>&1)
+  out=$(cd "$ship_scratch" && PATH="$ship_scratch/fakebin:$PATH" FACTORY_TYPECHECK_CMD=false FACTORY_LINT_CMD=true FACTORY_TEST_CMD=true scripts/factory/ship.sh -m "should not land" 2>&1)
   rc=$?
   head_after=$(cd "$ship_scratch" && git rev-parse HEAD)
   if [ "$rc" -ne 0 ] && [ "$head_after" = "$ship_head_before" ] && printf '%s\n' "$out" | grep -qx 'VERIFY RED'; then
@@ -687,17 +695,27 @@ fi
 rm -rf "$ship_scratch"
 
 # -- task-master.sh + codegraph-query.py (F5). A hermetic scratch repo with
-# its own copy of docs/plan.md and scripts/factory/{lib.sh,task-master.sh,
+# its own minimal configured plan file and scripts/factory/{lib.sh,task-master.sh,
 # codegraph-query.py}, but pointed at the real (read-only) .codegraph db via
 # --db -- exactly the pattern the brief calls for: the scratch repo has no
 # source tree of its own, so codegraph-query.py's repo-root-from-db-path
 # resolution is what makes the real file reads work from inside it. --
 real_db="$PWD/.codegraph/codegraph.db"
 tm_scratch=$(mktemp -d)
-mkdir -p "$tm_scratch/scripts/factory" "$tm_scratch/docs"
+plan_file="${FACTORY_PLAN_FILE:-docs/plan.md}"
+mkdir -p "$tm_scratch/scripts/factory" "$tm_scratch/$(dirname "$plan_file")"
 cp "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/task-master.sh" "$SCRIPT_DIR/codegraph-query.py" "$tm_scratch/scripts/factory/"
+[ -f "$SCRIPT_DIR/config.sh" ] && cp "$SCRIPT_DIR/config.sh" "$tm_scratch/scripts/factory/config.sh"
 chmod +x "$tm_scratch/scripts/factory/task-master.sh" "$tm_scratch/scripts/factory/codegraph-query.py"
-cp docs/plan.md "$tm_scratch/docs/plan.md"
+cat > "$tm_scratch/$plan_file" <<'PLAN'
+# Plan
+
+### 4. Scope repository fetching to the GitHub App installation
+- **Status:** Not Started
+- **Priority:** Critical
+- **What:** Ensure repository scanning is scoped to the authenticated user's GitHub App installation.
+- **Launch check:** app/api/scan/start/route.ts, lib/github/fetch-repo.ts, lib/github/__tests__/fetch-repo.test.ts.
+PLAN
 if [ -n "$tm_scratch" ] && (
     cd "$tm_scratch" &&
     git init -q &&
@@ -707,7 +725,7 @@ if [ -n "$tm_scratch" ] && (
     git commit -q -m init
   ) >/dev/null 2>&1
 then
-  plan_before=$(sha256sum "$tm_scratch/docs/plan.md")
+  plan_before=$(sha256sum "$tm_scratch/$plan_file")
 
   out=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 2>&1)
   rc=$?
@@ -726,7 +744,7 @@ then
     bad "task-master.sh --lane bogus: rc=$rc out='$out' (want rc=2)"
   fi
 
-  expected_999="task-master: plan item 999 not found in docs/plan.md"
+  expected_999="task-master: plan item 999 not found in $plan_file"
   out=$(cd "$tm_scratch" && scripts/factory/task-master.sh 999 --lane high-risk 2>&1)
   rc=$?
   if [ "$rc" -eq 3 ] && [ "$out" = "$expected_999" ]; then
@@ -740,7 +758,7 @@ then
     rc=$?
     draft_rel=$(printf '%s\n' "$out" | tail -1)
     draft_path="$tm_scratch/$draft_rel"
-    plan_after=$(sha256sum "$tm_scratch/docs/plan.md")
+    plan_after=$(sha256sum "$tm_scratch/$plan_file")
     folders_ok=1
     for d in drafts queued active done blocked failed; do
       [ -f "$tm_scratch/docs/tasks/$d/.gitkeep" ] || folders_ok=0
@@ -756,11 +774,11 @@ then
        && grep -qx 'approval: pending' "$draft_path" \
        && grep -qx 'plan_item: 4' "$draft_path" \
        && grep -qx 'plan_status_owner: runner' "$draft_path" \
-       && grep -qx 'source: docs/plan.md#4' "$draft_path" \
+       && grep -qx "source: ${plan_file}#4" "$draft_path" \
        && grep -qx 'runner_eligible: false' "$draft_path" \
        && grep -q 'lib/github/fetch-repo.ts' "$draft_path"
     then
-      ok "task-master.sh 4 --lane high-risk creates the 6 queue folders (.gitkeep), writes the draft with the exact frontmatter key order, leaves docs/plan.md byte-identical, and mentions lib/github/fetch-repo.ts"
+      ok "task-master.sh 4 --lane high-risk creates the 6 queue folders (.gitkeep), writes the draft with the exact frontmatter key order, leaves $plan_file byte-identical, and mentions lib/github/fetch-repo.ts"
     else
       bad "task-master.sh real run: rc=$rc draft_path=$draft_path folders_ok=$folders_ok plan_before=$plan_before plan_after=$plan_after fm_keys='$fm_keys' (scratch kept at $tm_scratch for inspection)"
     fi

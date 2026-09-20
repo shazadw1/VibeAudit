@@ -15,6 +15,7 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
+[ -f "$SCRIPT_DIR/config.sh" ] && . "$SCRIPT_DIR/config.sh"
 cd "$SCRIPT_DIR/../.." || { echo "task-master: could not reach the repo root" >&2; exit 1; }
 REPO_ROOT="$PWD"
 CGQ="$SCRIPT_DIR/codegraph-query.py"
@@ -90,7 +91,7 @@ if ! g rev-parse HEAD >/dev/null 2>&1; then
   exit 1
 fi
 
-plan_file="docs/plan.md"
+plan_file="${FACTORY_PLAN_FILE:-docs/plan.md}"
 item_block=""
 if [ -f "$plan_file" ]; then
   item_block=$(awk -v n="$item" '
@@ -102,7 +103,7 @@ if [ -f "$plan_file" ]; then
   ' "$plan_file")
 fi
 if [ -z "$item_block" ]; then
-  echo "task-master: plan item $item not found in docs/plan.md" >&2
+  echo "task-master: plan item $item not found in $plan_file" >&2
   exit 3
 fi
 
@@ -318,7 +319,7 @@ created_at=$(date -u +%FT%TZ)
   printf 'approval: pending\n'
   printf 'plan_item: %s\n' "$item"
   printf 'plan_status_owner: runner\n'
-  printf 'source: docs/plan.md#%s\n' "$item"
+  printf 'source: %s#%s\n' "$plan_file" "$item"
   printf 'created_at: %s\n' "$created_at"
   printf 'runner_eligible: false\n'
   printf -- '---\n\n'

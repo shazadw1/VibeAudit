@@ -65,3 +65,15 @@ next-env.d.ts
 !.claude/agents/*.md
 !.claude/commands/
 !.claude/commands/*.md
+
+# coding factory
+.factory/
+!.claude/
+.claude/*
+!.claude/settings.json
+!.claude/agents/
+!.claude/agents/*.md
+!.claude/commands/
+!.claude/commands/*.md
+!.claude/skills/
+!.claude/skills/**
