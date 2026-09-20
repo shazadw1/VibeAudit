@@ -49,6 +49,12 @@ The main launch risk is product honesty: the headline "Autonomous PR Fix Engine"
 - **Priority:** Critical
 - **What:** `components/dashboard/copilot-client.tsx` (502 lines, fixture-only) returns canned replies claiming an "Autonomous PR #117" was opened and that analysis ran "in volatile AWS Nitro memory". Same honesty problem as the testimonial in item 1. Label the page demo or remove the fabricated content. Note: [Roadmap.md](../Roadmap.md) §4 says no Copilot feature was found; this page is it.
 
+### 17. Harden `parseRepoInput` path handling
+- **Status:** Not Started
+- **Priority:** Low
+- **What:** The deferred "Minor" half of [implementation_plan.md §0.1](implementation_plan.md#part-0--prerequisites-surfaced-in-review), left out of item 4 as a separate cleanup: `parseRepoInput` in `lib/github/fetch-repo.ts` lets `?`, `#`, and `..` through into the API path. Impact is low because the host is fixed, but `encodeURIComponent` the owner and repo segments and reject the three characters outright.
+- **Launch check:** A crafted `owner/repo` string cannot alter the API path or reach an unintended endpoint.
+
 ---
 
 ## Phase 1 — Minimum Paid Launch
@@ -69,6 +75,24 @@ The main launch risk is product honesty: the headline "Autonomous PR Fix Engine"
 - **Status:** Not Started
 - **Priority:** High
 - **What:** Show MRR, active subscriptions, scan volume, AI/fix-generation cost, coupon usage, failed webhooks, failed payments, high-usage accounts, and GitHub integration failures.
+
+### 18. Build usage metering and AI cost accounting
+- **Status:** Not Started
+- **Priority:** High
+- **What:** Item 6 lands the `usage_events` ledger and enforcement; this item makes usage cost-aware. Record provider cost per AI fix and Copilot call (input/output tokens, model, provider, internal cost), spend plan-included budget before purchased top-up credits, reset included budget each billing period without rollover, grant only the prorated delta on mid-cycle upgrades, and charge or refund once per fix attempt. See `docs/checklist.md` "Usage Limits" lines 115-121 and "Cost, Budget, Credits" line 321. Depends on item 3 for where budgets and provider pricing are stored.
+- **Launch check:** A fix attempt debits the right budget exactly once, and the operator report in item 8 can show real cost per account.
+
+### 19. Replace in-memory rate limiting and add abuse controls
+- **Status:** Not Started
+- **Priority:** High
+- **What:** `lib/rate-limit.ts` is per-instance and in-memory, so limits reset on redeploy and do not hold across instances. Move to Redis/Upstash or Postgres, then add the controls item 6 deliberately left out: daily caps to contain account compromise and scripted abuse, public-endpoint controls by IP/user agent/repository target, scan status polling limits, and GitHub webhook event rate controls with delivery-ID dedupe. See `docs/checklist.md` "Usage Limits" lines 111 and 122-125.
+- **Launch check:** Limits survive a redeploy and hold across instances; a scripted caller cannot exhaust a plan's month in a single burst.
+
+### 20. Surface limit-reached states in the product
+- **Status:** Not Started
+- **Priority:** Medium
+- **What:** Item 6 returns a machine-readable 402 (`code: "plan_limit_exceeded"` with `limit` and `upgrade`) but nothing renders it. Show the blocked state, the usage against each limit, and the upgrade path in the dashboard and on each gated action, and show current usage on the billing settings page. See `docs/checklist.md` "Upgrade Options" lines 138-139.
+- **Launch check:** A free user who hits the scan limit sees why, what resets it, and how to upgrade, without reading a network response.
 
 ---
 

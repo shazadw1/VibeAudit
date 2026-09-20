@@ -390,7 +390,9 @@ lines 112-115, "Upgrade Options" lines 136-140, "Plan Catalogue" line 75, and
   (line 124).
 - Dashboard UI for "limit reached" beyond passing the 402 body through; a later micro
   item can render it.
-- Any change to checkout, portal, or subscription-update flows (plan item 2).
+- Any change to checkout, portal, or subscription-update flows (plan item 2), including
+  whether a downgrade applies immediately or at period end (`docs/checklist.md` line 135).
+  Deferred work surfaced while drafting this item is tracked as plan items 18-20.
 - Removing the in-memory `rateLimit` calls; they stay as abuse protection.
 
 ## Implementation Tasks
@@ -484,7 +486,8 @@ reviewer; a deviation is a decision outside the brief and must stop for the user
    certificates, exports, API usage, team seats. Controller ruling on the user's "routes
    or checks": a real route is built only where a table already exists to gate
    (`monitoring_config`); the four kinds with no feature get helper enforcement, unit
-   tests, and the source-level guard, not stub routes. Confirm or overrule this ruling.
+   tests, and the source-level guard, not stub routes. **Confirmed by the user
+   2026-09-20.** Follow-up work this defers is tracked as plan items 18-20.
 2. **Period: Stripe billing period**, stored on `profiles` by the webhook; calendar-month
    fallback anchored on `profiles.created_at` for profiles with null period columns.
 3. **Usage source: a single `usage_events` ledger** written by every gated route. Upload
@@ -514,5 +517,5 @@ reviewer; a deviation is a decision outside the brief and must stop for the user
 Assumptions recorded, not decisions: `api_request` is a per-day kind while the others are
 per-period or standing; the `features` marketing strings in `plans.ts` are not touched.
 The codegraph index was stale when drafted (warning above); context confirmed by direct
-file reads on 2026-09-20. No remaining open questions except confirmation of the ruling
-in decision 1.
+file reads on 2026-09-20. No remaining open questions; every decision above is confirmed
+and this draft is ready for approval and queueing.
