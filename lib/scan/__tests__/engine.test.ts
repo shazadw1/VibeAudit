@@ -53,6 +53,17 @@ describe("engine", () => {
     expect(res.filesScanned).toBe(2);
   });
 
+  it("ignores generated build output under .next/", () => {
+    const base = runScanEngine(CLEAN);
+    const withGenerated = runScanEngine([
+      ...CLEAN,
+      { path: ".next/server/app/page.js", content: 'const k = "sk_live_' + "c".repeat(20) + '";' },
+      { path: ".next/static/chunks/main.js", content: "<div dangerouslySetInnerHTML={{ __html: x }} />" },
+    ]);
+    expect(withGenerated.filesScanned).toBe(base.filesScanned);
+    expect(withGenerated.findings).toEqual(base.findings);
+  });
+
   it("orders findings worst-first and is deterministic", () => {
     const files = Object.values(FIXTURES);
     const a = runScanEngine(files);
