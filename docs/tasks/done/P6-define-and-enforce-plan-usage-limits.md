@@ -2,13 +2,14 @@
 id: P6
 title: Define and enforce plan usage limits
 lane: high-risk
-status: queued
+status: needs-verification
 approval: approved
 plan_item: 6
 plan_status_owner: runner
 source: docs/plan.md#6
 created_at: 2026-09-20T01:47:22Z
 runner_eligible: false
+runner_started_at: 2026-09-20T02:12:52Z
 ---
 
 ## Problem
@@ -476,6 +477,22 @@ lines 112-115, "Upgrade Options" lines 136-140, "Plan Catalogue" line 75, and
   from the client; confirm the migration's RLS blocks a user reading another user's
   `usage_events`; rerun `scripts/factory/verify.sh --full` itself.
 - Never call live Stripe or GitHub with real credentials (`CLAUDE.md` §4).
+
+## Execution Note
+
+Committed at `414fe3b` on branch `dev`. VERIFY GREEN — 72 tests (10 files), tsc clean, lint clean.
+
+**All implementation tasks complete:**
+- Migration `supabase/migrations/20260920000000_plan_limits_and_usage.sql`: `plan_limits` + `usage_events` tables, period columns on `profiles`, RLS, seed values. Mirrored in `supabase/schema.sql` including RLS.
+- `types/database.ts`: `plan_limits`, `usage_events` types + profile period columns added.
+- `lib/stripe/plans.ts`: `scansPerMonth`/`reposLimit` removed; `LIMIT_KINDS`/`LimitKind`/`PlanLimits` exported.
+- `lib/entitlements.ts`: full helper with `getPlanLimits`, `currentPeriod`, `checkLimit`, `recordUsage`, `limitExceededResponse`. Null = unlimited enforced. Standing kinds (repo, monitored_repo, team_seat) count DB rows; period kinds count usage_events.
+- Webhook writes/clears `current_period_start/end` on subscription events.
+- All four enforcement points active (scan, connect, fix, monitoring). Connect route cap-enforces after `syncInstallationRepos` bulk upsert (delete excess repos beyond plan limit).
+- New route `app/api/monitoring/route.ts`: enables/disables monitoring_config with limit check on enable.
+- Full test suite: entitlements (all 8 kinds), guard test, scan/connect/fix/monitoring/webhook route tests.
+
+**Needs live verification** (Stripe webhook period columns, scratch Supabase migration apply) per task spec §Verification.
 
 ## Approval Notes
 WARNING: codegraph index is stale (index_older_than_head); re-indexing is a human decision, not this script's

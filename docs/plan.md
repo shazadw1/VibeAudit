@@ -60,7 +60,7 @@ The main launch risk is product honesty: the headline "Autonomous PR Fix Engine"
 ## Phase 1 — Minimum Paid Launch
 
 ### 6. Define and enforce plan usage limits
-- **Status:** Not Started
+- **Status:** Needs Verification (2026-09-20, factory runner; see P6-define-and-enforce-plan-usage-limits.md)
 - **Priority:** Critical
 - **What:** Set daily/monthly limits for scans, connected repos, monitored repos, fix-generation attempts, certificates, exports, API usage, and team seats.
 - **Launch check:** Limits are enforced server-side for UI and direct API calls.
