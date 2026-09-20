@@ -2,8 +2,8 @@
 id: P6
 title: Define and enforce plan usage limits
 lane: high-risk
-status: draft
-approval: pending
+status: queued
+approval: approved
 plan_item: 6
 plan_status_owner: runner
 source: docs/plan.md#6
