@@ -2,14 +2,14 @@
 id: P4
 title: Scope repository fetching to the GitHub App installation
 lane: high-risk
-status: queued
+status: needs-verification
 approval: approved
 plan_item: 4
 plan_status_owner: runner
 source: docs/plan.md#4
 created_at: 2026-09-19T23:04:25Z
 runner_eligible: false
-runner_started_at: 2026-09-20T00:28:59Z
+runner_started_at: 2026-09-20T01:02:11Z
 ---
 
 ## Problem
@@ -616,3 +616,9 @@ the user.
 Lane is `high-risk` as given: paths under `lib/github/` and `app/api/` match the `CLAUDE.md`
 high-risk list, and `components/scan/real-scan-client.tsx:138` is feature-availability copy.
 No lane conflict. No remaining open questions.
+
+## Execution Note (2026-09-20)
+
+Implementation shipped at commit `e9d8a71`. Spec compliance review: PASS. Code quality review: PASS (minor-only). `npx tsc --noEmit`, `npx next lint`, `npx vitest run` (24/24) all green.
+
+Closes as `needs-verification`: the two-installation live check (user A cannot scan user B's repo; 503 on missing App credentials; real `installation_id` written to `scans`) cannot be run in this environment. Required per Approval Notes item 5 before promoting to `Done`.
