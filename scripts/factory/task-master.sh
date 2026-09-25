@@ -274,9 +274,27 @@ fi
 codegraph_context=$(cat "$ctx_file")
 rm -f "$ctx_file"
 
-# -- lane conflict check: compare the discovered file list against the
-# high-risk path list (CLAUDE.md "Lanes"). --
-HIGH_RISK_PATHS=(lib/github/ lib/stripe/ lib/supabase/ middleware.ts supabase/ app/api/github/ app/api/stripe/ app/api/auth/ app/api/fix/ scripts/factory/ .claude/ skills/ CLAUDE.md)
+# -- lane conflict check: compare the discovered file list against the repo's
+# high-risk path list (config.sh FACTORY_HIGH_RISK_PATHS, which should mirror
+# that repo's own CLAUDE.md "Lanes" section).
+#
+# This list used to be hardcoded here to VibeAudit's product layout, which
+# shipped unchanged to every repo: outside VibeAudit it matched none of the
+# repo's own sensitive paths, so the warning could never fire where it
+# mattered. The fallback below is the factory's own control surface only --
+# high-risk everywhere by definition -- so an older config.sh that predates
+# the variable still gets a correct, if narrower, check rather than another
+# repo's paths.
+# declare -p guards the ${#...} under `set -u`: an unset array would abort the
+# script. Note "${arr[@]+x}" is NOT a usable guard here -- for an unset array
+# it expands to zero words, so [ -n "${arr[@]+x}" ] collapses to [ -n ] and
+# tests the literal string "-n", which is always true.
+if declare -p FACTORY_HIGH_RISK_PATHS >/dev/null 2>&1 \
+   && [ "${#FACTORY_HIGH_RISK_PATHS[@]}" -gt 0 ]; then
+  HIGH_RISK_PATHS=("${FACTORY_HIGH_RISK_PATHS[@]}")
+else
+  HIGH_RISK_PATHS=(scripts/factory/ .claude/ skills/ CLAUDE.md)
+fi
 declare -a matched=()
 while IFS= read -r fp; do
   [ -n "$fp" ] || continue

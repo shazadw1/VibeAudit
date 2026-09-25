@@ -37,17 +37,29 @@ def open_db(path):
         sys.stderr.write("codegraph-query: database not found: %s\n" % path)
         sys.exit(1)
     abs_path = os.path.abspath(path)
+    # The probe has to read a real database page, not just evaluate a
+    # constant. "SELECT 1" never touches the file, so it succeeds on a
+    # mode=ro connection that cannot actually serve a table read -- which is
+    # what happens when the index was written by another user (the codegraph
+    # container runs as root) and neither the db nor its directory is
+    # writable by us: sqlite wants to create/verify its journal or -shm
+    # sidecar before handing over a page, and fails with "attempt to write a
+    # readonly database" on the first genuine query instead of at connect
+    # time. With the weak probe the immutable=1 retry below could never fire,
+    # so every query died in the caller. Found in ClinicGrowthHub, where the
+    # whole Codegraph Context section came back silently empty.
+    probe = "SELECT count(*) FROM sqlite_master"
     uri = "file:%s?mode=ro" % abs_path
     try:
         conn = sqlite3.connect(uri, uri=True)
-        conn.execute("SELECT 1")
+        conn.execute(probe)
         return conn
     except sqlite3.OperationalError:
         pass
     try:
         uri2 = "file:%s?mode=ro&immutable=1" % abs_path
         conn = sqlite3.connect(uri2, uri=True)
-        conn.execute("SELECT 1")
+        conn.execute(probe)
         return conn
     except sqlite3.OperationalError as exc:
         sys.stderr.write("codegraph-query: cannot open database read-only: %s (%s)\n" % (path, exc))

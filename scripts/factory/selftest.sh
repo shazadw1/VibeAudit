@@ -694,27 +694,39 @@ else
 fi
 rm -rf "$ship_scratch"
 
-# -- task-master.sh + codegraph-query.py (F5). A hermetic scratch repo with
-# its own minimal configured plan file and scripts/factory/{lib.sh,task-master.sh,
-# codegraph-query.py}, but pointed at the real (read-only) .codegraph db via
-# --db -- exactly the pattern the brief calls for: the scratch repo has no
-# source tree of its own, so codegraph-query.py's repo-root-from-db-path
-# resolution is what makes the real file reads work from inside it. --
-real_db="$PWD/.codegraph/codegraph.db"
+# -- task-master.sh + codegraph-query.py (F5). Fully hermetic: the scratch repo
+# gets its own fixture source files AND its own synthetic .codegraph index,
+# built below, so every assertion names symbols this script created.
+#
+# It used to point --db at the host repo's real index and assert VibeAudit's
+# own symbols (lib/github/fetch-repo.ts, getInstallationOctokit,
+# fetchRepoFiles). Those exist in exactly one repo, so five cases failed in
+# every other one and the kit could not reach GREEN anywhere but VibeAudit.
+# Worse, the real-index path made the cases non-deterministic: they also
+# depended on whether that index was readable and current.
+#
+# The fixture deliberately puts one symbol under scripts/factory/, which is
+# high-risk in every repo's lane list, so the lane-conflict case does not
+# depend on the host repo's product layout either. --
 tm_scratch=$(mktemp -d)
 plan_file="${FACTORY_PLAN_FILE:-docs/plan.md}"
-mkdir -p "$tm_scratch/scripts/factory" "$tm_scratch/$(dirname "$plan_file")"
+mkdir -p "$tm_scratch/scripts/factory" "$tm_scratch/$(dirname "$plan_file")" "$tm_scratch/src"
 cp "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/task-master.sh" "$SCRIPT_DIR/codegraph-query.py" "$tm_scratch/scripts/factory/"
 [ -f "$SCRIPT_DIR/config.sh" ] && cp "$SCRIPT_DIR/config.sh" "$tm_scratch/scripts/factory/config.sh"
 chmod +x "$tm_scratch/scripts/factory/task-master.sh" "$tm_scratch/scripts/factory/codegraph-query.py"
+printf 'fixtureLoadWidget() { :; }\n' > "$tm_scratch/scripts/factory/fixture-widget.sh"
+printf 'export function fixtureHelperToken() { return 1; }\n' > "$tm_scratch/src/fixture-plain.js"
+printf '.codegraph/\n' > "$tm_scratch/.gitignore"
+# The plan item's terms must be backticked: task-master.sh extracts search
+# terms from `...` spans in the item block and from --terms, nothing else.
 cat > "$tm_scratch/$plan_file" <<'PLAN'
 # Plan
 
-### 4. Scope repository fetching to the GitHub App installation
+### 4. Route the fixture helper through the factory widget
 - **Status:** Not Started
 - **Priority:** Critical
-- **What:** Ensure repository scanning is scoped to the authenticated user's GitHub App installation.
-- **Launch check:** app/api/scan/start/route.ts, lib/github/fetch-repo.ts, lib/github/__tests__/fetch-repo.test.ts.
+- **What:** Call `fixtureLoadWidget` from `fixtureHelperToken`.
+- **Launch check:** `src/fixture-plain.js` and `scripts/factory/fixture-widget.sh` both covered.
 PLAN
 if [ -n "$tm_scratch" ] && (
     cd "$tm_scratch" &&
@@ -725,6 +737,81 @@ if [ -n "$tm_scratch" ] && (
     git commit -q -m init
   ) >/dev/null 2>&1
 then
+  # Synthetic codegraph index for the scratch repo. Built after the commit so
+  # indexed_at can be set past HEAD's commit time -- otherwise
+  # codegraph-query.py's status would report index_older_than_head and
+  # task-master.sh would add a staleness WARNING the cases below don't expect.
+  # Only the columns codegraph-query.py actually reads are declared.
+  fixture_db="$tm_scratch/.codegraph/codegraph.db"
+  mkdir -p "$tm_scratch/.codegraph"
+  if python3 - "$tm_scratch" "$fixture_db" <<'PY'
+import hashlib, os, sqlite3, sys, time
+
+root, db_path = sys.argv[1], sys.argv[2]
+stamp = int((time.time() + 600) * 1000)
+
+FILES = {"src/fixture-plain.js": "javascript",
+         "scripts/factory/fixture-widget.sh": "shell"}
+# a_bXc and a_b%d exist only to prove codegraph-query.py escapes LIKE
+# metacharacters: a search for the literal "a_b%" must match a_b%d and must
+# NOT match a_bXc, which is what an unescaped "_" wildcard would pick up.
+NODES = [
+    ("n1", "function", "fixtureHelperToken", "src/fixture-plain.js", 1, 1, 1,
+     "fixtureHelperToken(): number"),
+    ("n2", "function", "fixtureLoadWidget", "scripts/factory/fixture-widget.sh", 1, 1, 1,
+     "fixtureLoadWidget()"),
+    ("n3", "function", "a_bXc", "src/fixture-plain.js", 2, 2, 0, None),
+    ("n4", "function", "a_b%d", "src/fixture-plain.js", 3, 3, 0, None),
+]
+
+conn = sqlite3.connect(db_path)
+conn.executescript("""
+CREATE TABLE files (path TEXT PRIMARY KEY, content_hash TEXT NOT NULL,
+  language TEXT NOT NULL, size INTEGER NOT NULL, modified_at INTEGER NOT NULL,
+  indexed_at INTEGER NOT NULL, node_count INTEGER DEFAULT 0, errors TEXT);
+CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,
+  qualified_name TEXT NOT NULL, file_path TEXT NOT NULL,
+  language TEXT NOT NULL DEFAULT 'unknown', start_line INTEGER NOT NULL,
+  end_line INTEGER NOT NULL, docstring TEXT, signature TEXT,
+  is_exported INTEGER DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0);
+CREATE VIRTUAL TABLE nodes_fts USING fts5(id, name, qualified_name, docstring,
+  signature, content='nodes', content_rowid='rowid');
+CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
+  INSERT INTO nodes_fts(rowid, id, name, qualified_name, docstring, signature)
+  VALUES (NEW.rowid, NEW.id, NEW.name, NEW.qualified_name, NEW.docstring, NEW.signature);
+END;
+CREATE TABLE edges (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL,
+  target TEXT NOT NULL, kind TEXT NOT NULL, metadata TEXT, line INTEGER, col INTEGER);
+CREATE TABLE unresolved_refs (id INTEGER PRIMARY KEY AUTOINCREMENT,
+  from_node_id TEXT NOT NULL, reference_name TEXT NOT NULL,
+  reference_kind TEXT NOT NULL, line INTEGER NOT NULL, col INTEGER NOT NULL DEFAULT 0,
+  candidates TEXT, file_path TEXT NOT NULL DEFAULT '',
+  language TEXT NOT NULL DEFAULT 'unknown');
+CREATE TABLE project_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL);
+""")
+for path, language in FILES.items():
+    with open(os.path.join(root, path), "rb") as fh:
+        blob = fh.read()
+    conn.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?,?)",
+                 (path, hashlib.sha256(blob).hexdigest(), language, len(blob),
+                  stamp, stamp, 2, None))
+for nid, kind, name, file_path, start, end, exported, signature in NODES:
+    conn.execute(
+        "INSERT INTO nodes (id, kind, name, qualified_name, file_path, start_line,"
+        " end_line, signature, is_exported, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (nid, kind, name, name, file_path, start, end, signature, exported, stamp))
+conn.execute("INSERT INTO edges (source, target, kind, line) VALUES ('n1','n2','calls',1)")
+conn.execute(
+    "INSERT INTO unresolved_refs (from_node_id, reference_name, reference_kind, line, file_path)"
+    " VALUES ('n1','FIXTURE_MISSING_REF','identifier',1,'src/fixture-plain.js')")
+conn.execute("INSERT INTO project_metadata VALUES ('fixture','selftest',?)", (stamp,))
+conn.commit()
+conn.close()
+PY
+  then :; else rm -f "$fixture_db"; fi
+
   plan_before=$(sha256sum "$tm_scratch/$plan_file")
 
   out=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 2>&1)
@@ -753,8 +840,8 @@ then
     bad "task-master.sh item 999: rc=$rc out='$out' (want rc=3, msg='$expected_999')"
   fi
 
-  if [ -f "$real_db" ]; then
-    out=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$real_db" 2>&1)
+  if [ -f "$fixture_db" ]; then
+    out=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$fixture_db" 2>&1)
     rc=$?
     draft_rel=$(printf '%s\n' "$out" | tail -1)
     draft_path="$tm_scratch/$draft_rel"
@@ -776,15 +863,16 @@ then
        && grep -qx 'plan_status_owner: runner' "$draft_path" \
        && grep -qx "source: ${plan_file}#4" "$draft_path" \
        && grep -qx 'runner_eligible: false' "$draft_path" \
-       && grep -q 'lib/github/fetch-repo.ts' "$draft_path"
+       && grep -q 'src/fixture-plain.js' "$draft_path" \
+       && grep -q 'fixtureHelperToken' "$draft_path"
     then
-      ok "task-master.sh 4 --lane high-risk creates the 6 queue folders (.gitkeep), writes the draft with the exact frontmatter key order, leaves $plan_file byte-identical, and mentions lib/github/fetch-repo.ts"
+      ok "task-master.sh 4 --lane high-risk creates the 6 queue folders (.gitkeep), writes the draft with the exact frontmatter key order, leaves $plan_file byte-identical, and mentions src/fixture-plain.js and fixtureHelperToken"
     else
       bad "task-master.sh real run: rc=$rc draft_path=$draft_path folders_ok=$folders_ok plan_before=$plan_before plan_after=$plan_after fm_keys='$fm_keys' (scratch kept at $tm_scratch for inspection)"
     fi
 
     expected_exists="task-master: draft already exists: $draft_rel (use --force to overwrite)"
-    out2=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$real_db" 2>&1)
+    out2=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$fixture_db" 2>&1)
     rc2=$?
     if [ "$rc2" -eq 4 ] && [ "$out2" = "$expected_exists" ]; then
       ok "task-master.sh second run without --force exits 4 with the exact message"
@@ -792,7 +880,7 @@ then
       bad "task-master.sh no-force rerun: rc=$rc2 out='$out2' (want rc=4, msg='$expected_exists')"
     fi
 
-    out3=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$real_db" --force 2>&1)
+    out3=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$fixture_db" --force 2>&1)
     rc3=$?
     if [ "$rc3" -eq 0 ] && [ -f "$draft_path" ]; then
       ok "task-master.sh --force overwrites an existing draft"
@@ -800,32 +888,56 @@ then
       bad "task-master.sh --force rerun: rc=$rc3 out='$out3'"
     fi
 
-    out4=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane micro --db "$real_db" --force 2>&1)
+    out4=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane micro --db "$fixture_db" --force 2>&1)
     rc4=$?
-    if [ "$rc4" -eq 0 ] && grep -Eq 'WARNING: lane micro but touched paths match high-risk:.*lib/github/' "$draft_path"; then
-      ok "task-master.sh --lane micro on item 4 writes a lane-conflict WARNING naming lib/github/"
+    if [ "$rc4" -eq 0 ] && grep -Eq 'WARNING: lane micro but touched paths match high-risk:.*scripts/factory/fixture-widget.sh' "$draft_path"; then
+      ok "task-master.sh --lane micro on item 4 writes a lane-conflict WARNING naming scripts/factory/fixture-widget.sh"
     else
       bad "task-master.sh lane-conflict case: rc=$rc4 (see $tm_scratch)"
     fi
 
-    out6=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$real_db" --force --terms lib/github/app.ts,getInstallationOctokit,GITHUB_TOKEN 2>&1)
+    # Asserts the rendered search-result line, not just that the term was
+    # echoed as a heading -- the old version grepped for the term itself,
+    # which task-master.sh prints as a "### `term`" heading whether or not
+    # the db returned anything, so it passed even against an unreadable index.
+    # FIXTURE_ABSENT_SYMBOL is in the list on purpose: a term with no matches
+    # must render the no-matches line rather than being dropped.
+    out6=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db "$fixture_db" --force --terms src/fixture-plain.js,fixtureLoadWidget,FIXTURE_ABSENT_SYMBOL 2>&1)
     rc6=$?
-    if [ "$rc6" -eq 0 ] && grep -q 'lib/github/app.ts' "$draft_path" && grep -q 'getInstallationOctokit' "$draft_path"; then
-      ok "task-master.sh --terms lib/github/app.ts,getInstallationOctokit,GITHUB_TOKEN on item 4 produces a draft whose Codegraph Context names lib/github/app.ts and getInstallationOctokit"
+    if [ "$rc6" -eq 0 ] \
+       && grep -q 'function `fixtureLoadWidget` — `scripts/factory/fixture-widget.sh:1-1` (exported)' "$draft_path" \
+       && grep -q '(no codegraph matches)' "$draft_path"; then
+      ok "task-master.sh --terms renders the fixtureLoadWidget search hit with its file:line-range, and a no-matches line for a term the index does not contain"
     else
       bad "task-master.sh --terms case: rc=$rc6 (see $tm_scratch)"
     fi
+
+    # Config-driven lane cross-check. Appending a FACTORY_HIGH_RISK_PATHS that
+    # names src/ and NOT scripts/factory/ must move the warning onto
+    # src/fixture-plain.js and drop fixture-widget.sh from it. That only holds
+    # if the list is read from config.sh: the built-in fallback would still be
+    # naming scripts/factory/, and the pre-2026.09.25.3 hardcoded array would
+    # have named neither.
+    cp "$tm_scratch/scripts/factory/config.sh" "$tm_scratch/config.sh.orig"
+    printf '\nFACTORY_HIGH_RISK_PATHS=(\n  src/\n)\n' >> "$tm_scratch/scripts/factory/config.sh"
+    out7=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane standard --db "$fixture_db" --force 2>&1)
+    rc7=$?
+    warn7=$(grep 'WARNING: lane standard but touched paths match high-risk:' "$draft_path" || true)
+    mv "$tm_scratch/config.sh.orig" "$tm_scratch/scripts/factory/config.sh"
+    if [ "$rc7" -eq 0 ] \
+       && printf '%s' "$warn7" | grep -q 'src/fixture-plain.js' \
+       && ! printf '%s' "$warn7" | grep -q 'scripts/factory/'; then
+      ok "task-master.sh takes its lane cross-check list from config.sh FACTORY_HIGH_RISK_PATHS, not a hardcoded array"
+    else
+      bad "task-master.sh config-driven high-risk paths: rc=$rc7 warn='$warn7'"
+    fi
   else
-    skip "task-master.sh 4 --lane high-risk --db <real> (real run)"
-    skip "task-master.sh second run without --force"
-    skip "task-master.sh --force overwrites"
-    skip "task-master.sh --lane micro lane-conflict WARNING"
-    skip "task-master.sh --terms lib/github/app.ts,getInstallationOctokit,GITHUB_TOKEN"
+    bad "selftest setup: the fixture codegraph index was not built, so the task-master.sh codegraph cases could not run"
   fi
 
-  # Independent of real_db (uses --db /nonexistent on purpose): derives its
-  # own draft path from its own output rather than reusing the guarded
-  # block's, since that block may not have run at all above.
+  # Independent of the fixture index (uses --db /nonexistent on purpose):
+  # derives its own draft path from its own output rather than reusing the
+  # guarded block's, since that block may not have run at all above.
   out5=$(cd "$tm_scratch" && scripts/factory/task-master.sh 4 --lane high-risk --db /nonexistent --force 2>&1)
   rc5=$?
   draft_path5="$tm_scratch/$(printf '%s\n' "$out5" | tail -1)"
@@ -837,7 +949,6 @@ then
 else
   bad "selftest setup: could not build the scratch repo for the task-master.sh cases"
 fi
-rm -rf "$tm_scratch"
 
 cgq_err=$(mktemp)
 cgq_out=$(python3 "$SCRIPT_DIR/codegraph-query.py" --db /nonexistent search x 2>"$cgq_err")
@@ -850,30 +961,44 @@ else
 fi
 rm -f "$cgq_err"
 
-if [ -f "$real_db" ]; then
-  cgq_json=$(python3 "$SCRIPT_DIR/codegraph-query.py" search fetchRepoFiles --json 2>/dev/null)
+if [ -f "$fixture_db" ]; then
+  cgq_json=$(python3 "$SCRIPT_DIR/codegraph-query.py" --db "$fixture_db" search fixtureHelperToken --json 2>/dev/null)
   cgq_json_rc=$?
   if [ "$cgq_json_rc" -eq 0 ] && printf '%s' "$cgq_json" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)
 assert isinstance(data, list) and len(data) > 0
-assert any(row.get("file_path") == "lib/github/fetch-repo.ts" for row in data)
+assert any(row.get("file_path") == "src/fixture-plain.js" for row in data)
 ' 2>/dev/null; then
-    ok "codegraph-query.py search fetchRepoFiles --json returns a JSON array naming lib/github/fetch-repo.ts"
+    ok "codegraph-query.py search fixtureHelperToken --json returns a JSON array naming src/fixture-plain.js"
   else
-    bad "codegraph-query.py search fetchRepoFiles --json: rc=$cgq_json_rc out='$cgq_json'"
+    bad "codegraph-query.py search fixtureHelperToken --json: rc=$cgq_json_rc out='$cgq_json'"
   fi
 
-  cgq_wild_out=$(python3 "$SCRIPT_DIR/codegraph-query.py" search 'a_b%' --json 2>/dev/null)
+  # The fixture index holds both a_b%d and a_bXc. Searching the literal
+  # "a_b%" must return only a_b%d: if the LIKE escaping regressed, "_" and
+  # "%" would act as wildcards and a_bXc would come back too. The old version
+  # only checked that the command did not crash, which any escaping bug would
+  # still have passed.
+  cgq_wild_out=$(python3 "$SCRIPT_DIR/codegraph-query.py" --db "$fixture_db" search 'a_b%' --json 2>/dev/null)
   cgq_wild_rc=$?
-  if [ "$cgq_wild_rc" -eq 0 ] && printf '%s' "$cgq_wild_out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
-    ok "codegraph-query.py search 'a_b%' (unescaped LIKE metacharacters) does not crash and returns rc 0"
+  if [ "$cgq_wild_rc" -eq 0 ] && printf '%s' "$cgq_wild_out" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+names = sorted(row.get("name") for row in data)
+assert names == ["a_b%d"], names
+' 2>/dev/null; then
+    ok "codegraph-query.py search 'a_b%' escapes LIKE metacharacters: matches a_b%d only, not a_bXc"
   else
     bad "codegraph-query.py search 'a_b%': rc=$cgq_wild_rc out='$cgq_wild_out'"
   fi
 else
-  skip "codegraph-query.py search fetchRepoFiles --json"
-  skip "codegraph-query.py search 'a_b%' (LIKE metacharacter escaping)"
+  bad "selftest setup: the fixture codegraph index was not built, so the codegraph-query.py cases could not run"
+fi
+if [ "$fail" -eq 0 ]; then
+  rm -rf "$tm_scratch"
+else
+  echo "selftest: scratch repo kept for inspection: $tm_scratch"
 fi
 
 echo
