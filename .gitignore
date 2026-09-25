@@ -77,3 +77,16 @@ next-env.d.ts
 !.claude/commands/*.md
 !.claude/skills/
 !.claude/skills/**
+
+# coding factory
+.factory/
+.codegraph/
+!.claude/
+.claude/*
+!.claude/settings.json
+!.claude/agents/
+!.claude/agents/*.md
+!.claude/commands/
+!.claude/commands/*.md
+!.claude/skills/
+!.claude/skills/**

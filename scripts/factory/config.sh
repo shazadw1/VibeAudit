@@ -1,7 +1,7 @@
 # Repo-specific factory configuration. Installed from repo_runner templates.
 # Edit this file in the target repo when its conventions differ from VibeAudit.
 
-[ -n "${FACTORY_KIT_VERSION:-}" ] || FACTORY_KIT_VERSION=2026.09.20.2
+[ -n "${FACTORY_KIT_VERSION:-}" ] || FACTORY_KIT_VERSION=2026.09.25.1
 [ -n "${FACTORY_PLAN_FILE:-}" ] || FACTORY_PLAN_FILE=docs/plan.md
 [ -n "${FACTORY_NODE_MODULES_DIR:-}" ] || FACTORY_NODE_MODULES_DIR=node_modules
 [ -n "${FACTORY_TYPECHECK_CMD:-}" ] || FACTORY_TYPECHECK_CMD='npx tsc --noEmit'
